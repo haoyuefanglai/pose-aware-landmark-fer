@@ -5,6 +5,7 @@ classifier.py
 """
 
 import os
+import json
 import joblib
 import numpy as np
 import pandas as pd
@@ -32,6 +33,9 @@ class ExpressionClassifier:
     def __init__(self, model_path=None):
         self.classes = EXPRESSION_CLASSES
         self.model = None
+        self.feature_set = "coords"
+        self.uses_blendshape = False
+        self.bl_names = None
 
         if model_path:
             if not os.path.isabs(model_path):
@@ -52,7 +56,32 @@ class ExpressionClassifier:
         data = joblib.load(path)
         self.model = data.get("model")
         self.classes = list(self.model.classes_)
-        print(f"[Success] 成功加载已训练模型: {path}，模型类型: {type(self.model).__name__}")
+        self.feature_set = data.get("feature_set", "coords")
+        # 兼容多种命名：coords_bl / coord_bl / coords_bl_roll / ...blendshape...
+        fs = str(self.feature_set).lower()
+        self.uses_blendshape = bool(data.get("uses_blendshape",
+                                             ("bl" in fs) or ("blendshape" in fs)))
+        self.bl_names = None
+        if self.uses_blendshape:
+            meta = os.path.join(CURRENT_DIR, "data", "fer_blendshape_names.json")
+            if os.path.exists(meta):
+                with open(meta, "r", encoding="utf-8") as f:
+                    self.bl_names = json.load(f)
+            else:
+                raise FileNotFoundError(
+                    f"模型声明使用 blendshape 特征，但缺少顺序元数据: {meta}"
+                )
+        print(f"[Success] 成功加载已训练模型: {path}，模型类型: {type(self.model).__name__}，"
+              f"特征集: {self.feature_set}")
+        return self
+
+    def build_input(self, norm_vector, blendshapes=None):
+        """按模型声明的特征集组装输入向量（坐标 / 坐标+blendshape）"""
+        vec = list(np.asarray(norm_vector, dtype=np.float32).ravel())
+        if self.uses_blendshape:
+            bs = blendshapes or {}
+            vec.extend(float(bs.get(name, 0.0)) for name in self.bl_names)
+        return np.asarray(vec, dtype=np.float32).reshape(1, -1)
 
     def save_model(self, path, model_type="svm"):
         """保存模型"""
@@ -69,7 +98,7 @@ class ExpressionClassifier:
         if use_ml_model and self.model is None:
             raise ValueError("ML engine requested but no model is loaded")
         if use_ml_model:
-            x = np.array(norm_vector).reshape(1, -1)
+            x = self.build_input(norm_vector, blendshapes)
             if hasattr(self.model, "predict_proba"):
                 probs = self.model.predict_proba(x)[0]
             else:

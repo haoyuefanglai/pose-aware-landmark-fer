@@ -133,8 +133,12 @@ def run_pipeline(source=0, model_path="model_svm.pkl", window_size=7, engine="ru
         print("       python realtime_demo.py --source test_video.mp4")
         return
 
-    print("\n[SUCCESS] 摄像头已成功打开！实时画面已弹出，请在弹出的窗口中查看。")
-    print(">>> 提示: 在画面窗口中按 [Q] 键可退出，按 [M] 键可切换关键点网格。")
+    if isinstance(source, int):
+        print("\n[SUCCESS] 摄像头已成功打开！实时画面已弹出，请在弹出的窗口中查看。")
+        print(">>> 提示: 在画面窗口中按 [Q] 键可退出，按 [M] 键可切换关键点网格。")
+    else:
+        print(f"\n[SUCCESS] 视频文件已打开: {source}（离线模式，不使用摄像头）。")
+        print(">>> 提示: 播放到结尾会自动退出，也可在画面窗口中按 [Q] 键提前退出。")
 
     # 时序概率滑动窗口队列 (防止帧间预测闪烁)
     prob_queue = deque(maxlen=window_size)
