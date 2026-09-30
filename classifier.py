@@ -38,7 +38,7 @@ class ExpressionClassifier:
                 resolved_path = os.path.join(CURRENT_DIR, model_path)
             else:
                 resolved_path = model_path
-            
+
             if os.path.exists(resolved_path):
                 self.load_model(resolved_path)
                 self.model_path = resolved_path
