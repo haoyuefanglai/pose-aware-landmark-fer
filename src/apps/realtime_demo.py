@@ -4,6 +4,20 @@ realtime_demo.py
 支持摄像头实时输入与离线视频文件测试，集成时序概率平滑滤波以防标签闪烁。
 """
 
+# --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
+# 本段由结构重构引入。算法逻辑不依赖它，仅用于把同级子目录加入模块搜索路径，
+# 使 `from feature_extractor import ...` 这类平铺导入在跨目录后依然有效。
+import os as _os
+import sys as _sys
+
+_SRC_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+for _sub in ("core", "pipeline", "experiments", "apps"):
+    _sub_path = _os.path.join(_SRC_DIR, _sub)
+    if _os.path.isdir(_sub_path) and _sub_path not in _sys.path:
+        _sys.path.insert(0, _sub_path)
+# --- 路径引导结束 ---
+
+
 import time
 import argparse
 from collections import deque
@@ -130,7 +144,7 @@ def run_pipeline(source=0, model_path="models/model_svm.pkl", window_size=7, eng
         extractor.close()
         print(f"\n[Error] 无法打开输入源: {source}。")
         print("[提示] 若当前环境无物理摄像头，请传入测试视频路径，例如:")
-        print("       python src/realtime_demo.py --source assets/example.mp4 --model models/model_fer_svm.pkl --engine ml")
+        print("       python src/apps/realtime_demo.py --source assets/example.mp4 --model models/model_fer_svm.pkl --engine ml")
         return
 
     if isinstance(source, int):

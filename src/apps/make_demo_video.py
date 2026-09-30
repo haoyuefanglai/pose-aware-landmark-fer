@@ -3,11 +3,25 @@ make_demo_video.py
 用 FER2013 留出图像合成一段离线演示视频 example.mp4。
 
 用途：摄像头不可用时，realtime_demo.py 可以直接读这段视频做完整演示：
-    python src/realtime_demo.py --source assets/example.mp4 --model models/model_fer_svm.pkl --engine ml
+    python src/apps/realtime_demo.py --source assets/example.mp4 --model models/model_fer_svm.pkl --engine ml
 
 画面右下角烧录的是数据集真实标签 (GT)，窗口 HUD 上显示的是模型预测，
 两者可以直接肉眼对照，不需要任何摄像头或外部视频素材。
 """
+
+# --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
+# 本段由结构重构引入。算法逻辑不依赖它，仅用于把同级子目录加入模块搜索路径，
+# 使 `from feature_extractor import ...` 这类平铺导入在跨目录后依然有效。
+import os as _os
+import sys as _sys
+
+_SRC_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+for _sub in ("core", "pipeline", "experiments", "apps"):
+    _sub_path = _os.path.join(_SRC_DIR, _sub)
+    if _os.path.isdir(_sub_path) and _sub_path not in _sys.path:
+        _sys.path.insert(0, _sub_path)
+# --- 路径引导结束 ---
+
 import argparse
 import os
 import sys
@@ -16,7 +30,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))            # src/
 ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 FER_NAMES = {0: "angry", 1: "disgust", 2: "fear", 3: "happy",
              4: "sad", 5: "surprise", 6: "neutral"}
@@ -128,5 +142,5 @@ if __name__ == "__main__":
     print(f"    分辨率 {w}x{h} @ {fps:.0f} fps，时长约 {n / max(fps, 1):.1f} 秒，"
           f"文件 {size_mb:.2f} MB，可读={ok}")
     print("\n[Done] 免摄像头运行方式：")
-    print(f"    python src/realtime_demo.py --source assets/{os.path.basename(a.out)} "
+    print(f"    python src/apps/realtime_demo.py --source assets/{os.path.basename(a.out)} "
           f"--model models/model_fer_svm.pkl --engine ml")

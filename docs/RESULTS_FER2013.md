@@ -1,6 +1,6 @@
 # FER2013 数据集替换与重训结果
 
-生成日期：2026-09-30　对应代码：`src/extract_fer_landmarks.py`、`src/train_fer_compare.py`、`src/tune_fer.py`、`src/finalize_fer.py`、`src/compare_old_new.py`
+生成日期：2026-09-30　对应代码：`src/pipeline/extract_fer_landmarks.py`、`src/experiments/train_fer_compare.py`、`src/experiments/tune_fer.py`、`src/experiments/finalize_fer.py`、`src/experiments/compare_old_new.py`
 
 本文档可直接作为实验报告第 2 章（数据说明）与第 4 章（实验结果与分析）的素材。
 
@@ -199,4 +199,4 @@ SVM 平均输出置信度 67.4%（未校准）。
    而注释称鼻尖应为 1（AUDIT.md 第 22 条）。若要修正，需升级 schema 并重提全部数据。
 4. **概率未校准**。显示置信度不能解释为跨人可靠性，建议在独立校准集上做 Platt / isotonic 校准。
 5. **未采集自采数据**。指导书建议"自主采集经过知情同意的 4—5 类表情数据"，
-   现有 `src/collect_and_train.py` 已支持，可作为补充真实场景样本。
+   现有 `src/apps/collect_and_train.py` 已支持，可作为补充真实场景样本。

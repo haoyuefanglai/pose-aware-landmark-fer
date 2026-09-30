@@ -8,6 +8,20 @@ tune_fer.py
   3. 在官方留出测试集 (publicTest + privateTest) 上评测
   4. 若优于现有基线，则覆盖保存 model_fer_svm.pkl / model_fer_mlp.pkl
 """
+
+# --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
+# 本段由结构重构引入。算法逻辑不依赖它，仅用于把同级子目录加入模块搜索路径，
+# 使 `from feature_extractor import ...` 这类平铺导入在跨目录后依然有效。
+import os as _os
+import sys as _sys
+
+_SRC_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+for _sub in ("core", "pipeline", "experiments", "apps"):
+    _sub_path = _os.path.join(_SRC_DIR, _sub)
+    if _os.path.isdir(_sub_path) and _sub_path not in _sys.path:
+        _sys.path.insert(0, _sub_path)
+# --- 路径引导结束 ---
+
 import os
 import sys
 import json
@@ -24,7 +38,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, f1_score, recall_score, confusion_matrix, classification_report
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))            # src/
 ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 CLASSES = ["neutral", "smile", "surprise", "frown", "sad"]
 

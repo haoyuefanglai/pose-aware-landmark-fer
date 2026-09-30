@@ -4,7 +4,22 @@ feature_extractor.py
 基于最新 MediaPipe Tasks (Vision FaceLandmarker) 架构，内置自动模型配置。
 """
 
+# --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
+# 本段由结构重构引入。算法逻辑不依赖它，仅用于把同级子目录加入模块搜索路径，
+# 使 `from feature_extractor import ...` 这类平铺导入在跨目录后依然有效。
+import os as _os
+import sys as _sys
+
+_SRC_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+for _sub in ("core", "pipeline", "experiments", "apps"):
+    _sub_path = _os.path.join(_SRC_DIR, _sub)
+    if _os.path.isdir(_sub_path) and _sub_path not in _sys.path:
+        _sys.path.insert(0, _sub_path)
+# --- 路径引导结束 ---
+
+
 import os
+import math
 import cv2
 import numpy as np
 import mediapipe as mp
@@ -33,17 +48,17 @@ MEDIAPIPE_TO_68 = [
 ]
 assert len(MEDIAPIPE_TO_68) == 68, f"MEDIAPIPE_TO_68 必须严格包含 68 个关键点，当前为 {len(MEDIAPIPE_TO_68)}"
 
-# 3D 通用人脸模型点 (用于 solvePnP 姿态解算)
-MODEL_POINTS_3D = np.array([
-    (0.0, 0.0, 0.0),          # 鼻尖 (MediaPipe 1)
-    (0.0, -330.0, -65.0),     # 下巴 (MediaPipe 152)
-    (-225.0, 170.0, -135.0),  # 右外眼角 (MediaPipe 33)
-    (225.0, 170.0, -135.0),   # 左外眼角 (MediaPipe 263)
-    (-150.0, -150.0, -125.0), # 右嘴角 (MediaPipe 61)
-    (150.0, -150.0, -125.0)   # 左嘴角 (MediaPipe 291)
-], dtype=np.float64)
+# [已移除] 原实现用一个 6 点通用 3D 人脸模型 (MODEL_POINTS_3D) + cv2.solvePnP 解算头部姿态。
+# 该模型定义在"y 轴朝上"的坐标系（眼睛 y=+170、下巴 y=-330），而图像坐标 y 轴朝下，
+# solvePnP 只能引入一次绕 x 轴的 180° 翻转来补偿，于是旋转矩阵出现 R[2,2] ≈ -1，
+# 使 pitch = atan2(R[2,1], R[2,2]) 被顶到 ±180° 附近。
+# 实测（FER2013 留出集 73 张）：pitch 中位数 -167.5°，98.6% 的样本 |pitch| > 150°，
+# 对旋转矩阵转置后仍是 163.5° / 94.5%，说明问题不在分解公式，而在模型坐标系。
+# 现改为直接使用 MediaPipe FaceLandmarker 输出的 facial_transformation_matrixes
+# （内部基于完整规范人脸模型拟合，且不需要自造相机内参），
+# 实测 pitch 中位数回到 -6.7°，|pitch| > 150° 的比例降到 0%。
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))            # src/
 ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 DEFAULT_MODEL_PATH = os.path.join(ROOT_DIR, "models", "face_landmarker.task")
 
@@ -100,8 +115,8 @@ class FaceFeatureExtractor:
             lm = raw_landmarks[idx]
             pts_68[i] = [lm.x * w, lm.y * h]
 
-        # 2. 估计头部姿态角 (SolvePnP)
-        head_pose = self._estimate_head_pose(raw_landmarks, w, h)
+        # 2. 估计头部姿态角 (MediaPipe 面部变换矩阵)
+        head_pose = self._estimate_head_pose(result)
 
         # 3. 几何尺度与中心归一化 (136维)
         norm_vector = self._normalize_landmarks(pts_68)
@@ -125,46 +140,39 @@ class FaceFeatureExtractor:
             "raw_mesh": raw_landmarks
         }
 
-    def _estimate_head_pose(self, raw_landmarks, w, h):
-        """利用 PnP 求解 3D 头部旋转角度 (Yaw: 左右偏航, Pitch: 上下俯仰, Roll: 侧倾翻滚)"""
-        pnp_indices = [1, 152, 33, 263, 61, 291]
-        image_points = np.array([
-            (raw_landmarks[idx].x * w, raw_landmarks[idx].y * h)
-            for idx in pnp_indices
-        ], dtype=np.float64)
+    def _estimate_head_pose(self, result):
+        """从 MediaPipe 的面部变换矩阵解算头部姿态角。
 
-        focal_length = w
-        center = (w / 2, h / 2)
-        camera_matrix = np.array([
-            [focal_length, 0, center[0]],
-            [0, focal_length, center[1]],
-            [0, 0, 1]
-        ], dtype=np.float64)
-        dist_coeffs = np.zeros((4, 1))
+        变换矩阵把 MediaPipe 的规范人脸模型映射到相机坐标系；取其旋转部分并转置，
+        即得到头部相对相机的朝向，再按标准 XYZ 顺序分解为欧拉角：
+        Yaw 左右偏航、Pitch 上下俯仰、Roll 侧倾翻滚。单位为度。
 
-        success, rot_vec, trans_vec = cv2.solvePnP(
-            MODEL_POINTS_3D, image_points, camera_matrix, dist_coeffs, flags=cv2.SOLVEPNP_ITERATIVE
-        )
-        if not success:
+        相比原来基于 solvePnP 的实现，这里复用了 MediaPipe 内部对完整 478 点规范
+        人脸模型的拟合结果，既不需要自造相机内参，也避开了 3D 模型坐标系与图像
+        坐标系 y 轴方向不一致造成的 180° 翻转（详见文件顶部说明）。
+        """
+        matrices = getattr(result, "facial_transformation_matrixes", None)
+        if not matrices:
             return {"yaw": 0.0, "pitch": 0.0, "roll": 0.0}
 
-        rot_mat, _ = cv2.Rodrigues(rot_vec)
-        # 从旋转矩阵分解出欧拉角
-        sy = np.sqrt(rot_mat[0, 0] ** 2 + rot_mat[1, 0] ** 2)
-        singular = sy < 1e-6
-        if not singular:
-            pitch = np.arctan2(rot_mat[2, 1], rot_mat[2, 2])
-            yaw = np.arctan2(-rot_mat[2, 0], sy)
-            roll = np.arctan2(rot_mat[1, 0], rot_mat[0, 0])
+        mat = np.asarray(matrices[0], dtype=np.float64).reshape(4, 4)
+        rot_mat = mat[:3, :3].T
+
+        sy = math.sqrt(rot_mat[0, 0] ** 2 + rot_mat[1, 0] ** 2)
+        if sy < 1e-6:
+            # 万向锁：yaw 与 roll 退化为同一自由度，按约定置 roll = 0
+            pitch = math.atan2(-rot_mat[1, 2], rot_mat[1, 1])
+            yaw = math.atan2(-rot_mat[2, 0], sy)
+            roll = 0.0
         else:
-            pitch = np.arctan2(-rot_mat[1, 2], rot_mat[1, 1])
-            yaw = np.arctan2(-rot_mat[2, 0], sy)
-            roll = 0
+            pitch = math.atan2(rot_mat[2, 1], rot_mat[2, 2])
+            yaw = math.atan2(-rot_mat[2, 0], sy)
+            roll = math.atan2(rot_mat[1, 0], rot_mat[0, 0])
 
         return {
             "yaw": float(np.degrees(yaw)),
             "pitch": float(np.degrees(pitch)),
-            "roll": float(np.degrees(roll))
+            "roll": float(np.degrees(roll)),
         }
 
     def _normalize_landmarks(self, pts_68):

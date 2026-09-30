@@ -15,6 +15,20 @@ train_fer_compare.py
 说明：FER2013 不提供受试者 ID，因此无法按其人员做 GroupKFold；
      这是本数据集相对 CK+ 的已知局限，报告中需如实说明。
 """
+
+# --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
+# 本段由结构重构引入。算法逻辑不依赖它，仅用于把同级子目录加入模块搜索路径，
+# 使 `from feature_extractor import ...` 这类平铺导入在跨目录后依然有效。
+import os as _os
+import sys as _sys
+
+_SRC_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+for _sub in ("core", "pipeline", "experiments", "apps"):
+    _sub_path = _os.path.join(_SRC_DIR, _sub)
+    if _os.path.isdir(_sub_path) and _sub_path not in _sys.path:
+        _sys.path.insert(0, _sub_path)
+# --- 路径引导结束 ---
+
 import os
 import sys
 import json
@@ -31,9 +45,22 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (accuracy_score, f1_score, recall_score,
                              confusion_matrix, classification_report)
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))            # src/
 ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 CLASSES = ["neutral", "smile", "surprise", "frown", "sad"]
+
+# 8 组对照设置：(展示名, 模型类型, 特征集, 是否折内标准化, 是否类别均衡)
+# strict_eval.py 也会复用这份定义，保证两个协议下的模型配置完全一致。
+SETTINGS = [
+    ("SVM · 坐标136维",                       "svm", "coords",          False, False),
+    ("SVM · 坐标+blendshape",                 "svm", "coords_bl",       False, False),
+    ("SVM · 坐标+blendshape +标准化",          "svm", "coords_bl",       True,  False),
+    ("SVM · 坐标+blendshape +标准化 +类别均衡", "svm", "coords_bl",       True,  True),
+    ("SVM · roll对齐坐标+blendshape +标准化",   "svm", "coords_bl_roll",  True,  False),
+    ("MLP · 坐标136维",                       "mlp", "coords",          False, False),
+    ("MLP · 坐标+blendshape",                 "mlp", "coords_bl",       False, False),
+    ("MLP · 坐标+blendshape +标准化",          "mlp", "coords_bl",       True,  False),
+]
 
 
 def load_features(csv_path):
@@ -125,16 +152,7 @@ def main():
     print("[Split] 训练集分布:", dict(zip(*np.unique(y_tr, return_counts=True))))
     print("[Split] 测试集分布:", dict(zip(*np.unique(y_te, return_counts=True))))
 
-    settings = [
-        ("SVM · 坐标136维",                       "svm", "coords",          False, False),
-        ("SVM · 坐标+blendshape",                 "svm", "coords_bl",       False, False),
-        ("SVM · 坐标+blendshape +标准化",          "svm", "coords_bl",       True,  False),
-        ("SVM · 坐标+blendshape +标准化 +类别均衡", "svm", "coords_bl",       True,  True),
-        ("SVM · roll对齐坐标+blendshape +标准化",   "svm", "coords_bl_roll",  True,  False),
-        ("MLP · 坐标136维",                       "mlp", "coords",          False, False),
-        ("MLP · 坐标+blendshape",                 "mlp", "coords_bl",       False, False),
-        ("MLP · 坐标+blendshape +标准化",          "mlp", "coords_bl",       True,  False),
-    ]
+    settings = SETTINGS
 
     results = []
     preds_store = {}

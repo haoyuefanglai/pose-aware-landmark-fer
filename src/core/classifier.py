@@ -4,6 +4,20 @@ classifier.py
 混淆矩阵输出，以及开箱即用的预校准几何规则/混合分类器。
 """
 
+# --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
+# 本段由结构重构引入。算法逻辑不依赖它，仅用于把同级子目录加入模块搜索路径，
+# 使 `from feature_extractor import ...` 这类平铺导入在跨目录后依然有效。
+import os as _os
+import sys as _sys
+
+_SRC_DIR = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+for _sub in ("core", "pipeline", "experiments", "apps"):
+    _sub_path = _os.path.join(_SRC_DIR, _sub)
+    if _os.path.isdir(_sub_path) and _sub_path not in _sys.path:
+        _sys.path.insert(0, _sub_path)
+# --- 路径引导结束 ---
+
+
 import os
 import json
 import joblib
@@ -25,7 +39,7 @@ EXPRESSION_NAMES_ZH = {
     "disgust": "厌恶 (Disgust)"
 }
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))            # src/
 ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 
 class ExpressionClassifier:

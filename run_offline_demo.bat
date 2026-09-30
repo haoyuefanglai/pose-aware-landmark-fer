@@ -31,12 +31,12 @@ if errorlevel 1 (
 
 if not exist "assets\example.mp4" (
     echo [Info] assets\example.mp4 not found, generating it from FER2013 test images...
-    %PY% src\make_demo_video.py
+    %PY% src\apps\make_demo_video.py
     echo.
 )
 
 echo Launching offline demo on assets\example.mp4 ...
-%PY% src\realtime_demo.py --source assets\example.mp4 --model models\model_fer_svm.pkl --engine ml --window 5
+%PY% src\apps\realtime_demo.py --source assets\example.mp4 --model models\model_fer_svm.pkl --engine ml --window 5
 
 echo.
 echo Demo finished.
