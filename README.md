@@ -3,6 +3,40 @@
 基于 MediaPipe 人脸关键点、头部姿态估计和 SVM / MLP 的实时表情演示项目。
 支持摄像头与视频输入、两种识别引擎、时序平滑与 HUD。
 
+## 项目结构
+
+```
+pose-aware-landmark-fer/
+├── run_demo.bat                 菜单式总入口（双击即可，含摄像头/离线/训练/自检）
+├── run_offline_demo.bat         一键离线视频演示，不需要摄像头
+├── start_camera_demo.bat        一键摄像头演示
+├── 启动实时摄像头演示.bat         一键摄像头演示（中文）
+├── requirements.txt
+├── requirements-tested.txt
+├── src/                         全部 Python 源码（13 个模块）
+├── models/                      模型权重
+│   ├── face_landmarker.task         MediaPipe 关键点模型，3.7MB
+│   ├── model_fer_svm.pkl            FER2013 5 类部署模型，当前默认，22MB
+│   ├── model_fer_mlp.pkl            FER2013 5 类 MLP
+│   ├── model_svm.pkl                旧 CK+ SVM，仅作对比基线
+│   └── model_mlp.pkl                旧 CK+ MLP，仅作对比基线
+├── data/                        数据集与评测结果（不进 Git）
+│   ├── fer2013_landmarks.csv        27,307 条特征表，48MB
+│   ├── fer2013_raw/                 FER2013 原始 parquet，133MB
+│   ├── fer_blendshape_names.json    52 维 blendshape 的名称与顺序
+│   └── fer2013_*.json / *.txt       评测记录与混淆矩阵
+├── docs/                        报告文档
+│   ├── AUDIT.md                     已知问题、混淆矩阵与改进方向
+│   └── RESULTS_FER2013.md           FER2013 完整结果，可直接用于实验报告
+└── assets/
+    └── example.mp4                  离线演示视频
+```
+
+**路径解析规则**：`src/` 下的脚本统一以**项目根目录**为基准解析 `data/`、`models/`、`assets/`，
+因此从任何工作目录调用都能找到文件；命令行传入的相对路径同样按项目根目录解释
+（`--model model_fer_svm.pkl` 和 `--model models/model_fer_svm.pkl` 都能命中）。
+所有 Python 模块必须都留在 `src/` 内，因为它们之间直接互相 `import`。
+
 ## 安装和运行
 
 本次验证环境：Windows、Python 3.14.3。具体依赖见 `requirements-tested.txt`。
@@ -11,25 +45,25 @@
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements-tested.txt
-python download_model.py
-python realtime_demo.py --source 0 --engine rules
+python src\download_model.py
+python src\realtime_demo.py --source 0 --engine rules
 ```
 
-下载脚本从 Google 官方模型存储获取 FaceLandmarker，并校验 SHA-256。
+下载脚本从 Google 官方模型存储获取 FaceLandmarker 并校验 SHA-256，保存到 `models/`。
 第三方模型遵循其原始条款。仓库不包含本地照片、CK+ 原始数据或特征 CSV。
 仅加载你信任的 `.pkl` 模型文件。
 
 ```powershell
 # 推荐：FER2013 重训模型（含自然类，与规则引擎类别一致）
-python realtime_demo.py --engine ml --model model_fer_svm.pkl
-python realtime_demo.py --engine ml --model model_fer_mlp.pkl
+python src\realtime_demo.py --engine ml --model models\model_fer_svm.pkl
+python src\realtime_demo.py --engine ml --model models\model_fer_mlp.pkl
 # 旧 CK+ 模型（无自然类，仅作对比基线）
-python realtime_demo.py --engine ml --model model_svm.pkl
-python realtime_demo.py --engine ml --model model_mlp.pkl
+python src\realtime_demo.py --engine ml --model models\model_svm.pkl
+python src\realtime_demo.py --engine ml --model models\model_mlp.pkl
 # 离线视频（不需要摄像头）
-python realtime_demo.py --source example.mp4 --model model_fer_svm.pkl --engine ml
-# 自检（先运行 download_model.py）
-python test_pipeline.py
+python src\realtime_demo.py --source assets\example.mp4 --model models\model_fer_svm.pkl --engine ml
+# 自检（先运行 src\download_model.py）
+python src\test_pipeline.py
 ```
 
 快捷键：Q / ESC 退出，M 显示关键点，T 切换引擎，S 保存截图。
@@ -41,27 +75,27 @@ python test_pipeline.py
 
 ```powershell
 # 1. 最快验证：7 项回归自检，不弹窗口、不读摄像头
-python test_pipeline.py
+python src\test_pipeline.py
 
 # 2. 离线视频演示（会弹出窗口，但输入是视频文件不是摄像头）
 #    画面右下角黄字是数据集真实标签，左上/右上 HUD 是模型预测，可直接肉眼对照
-python realtime_demo.py --source example.mp4 --model model_fer_svm.pkl --engine ml --window 5
+python src\realtime_demo.py --source assets\example.mp4 --model models\model_fer_svm.pkl --engine ml --window 5
 # 等价的一键方式：双击 run_offline_demo.bat，或 run_demo.bat 选 6
 
 # 3. 批量图像评测，不弹窗口，直接打印准确率与类别分布
-python compare_old_new.py
+python src\compare_old_new.py
 
 # 4. 数据集与训练全流程（全部离线，原始数据已缓存在 data/fer2013_raw）
-python extract_fer_landmarks.py   # 首次运行会走 hf-mirror 下载约 133MB
-python train_fer_compare.py       # 8 组设置对照实验
-python finalize_fer.py            # 重训部署模型 + 端到端验证
+python src\extract_fer_landmarks.py   # 首次运行会走 hf-mirror 下载约 133MB
+python src\train_fer_compare.py       # 8 组设置对照实验
+python src\finalize_fer.py            # 重训部署模型 + 端到端验证
 ```
 
-`example.mp4` 由 `make_demo_video.py` 从 FER2013 留出图像合成（40 张图、530 帧、480×480、约 26 秒、0.67MB），
+`assets/example.mp4` 由 `make_demo_video.py` 从 FER2013 留出图像合成（40 张图、530 帧、480×480、约 26 秒、0.67MB），
 删掉后会自动重新生成，也可以手动调参重建：
 
 ```powershell
-python make_demo_video.py --per-class 8 --frames 12 --fps 20
+python src\make_demo_video.py --per-class 8 --frames 12 --fps 20
 ```
 
 `--source` 传数字（如 `0`）才会打开摄像头并做镜像翻转；传视频路径按原样播放、不做翻转。
@@ -90,7 +124,7 @@ python make_demo_video.py --per-class 8 --frames 12 --fps 20
 | train | 21,868 | 4,705 | 6,838 | 2,932 | 3,398 | 3,995 |
 | publicTest + privateTest（留出，训练未见） | 5,439 | 1,160 | 1,684 | 759 | 817 | 1,019 |
 
-留出测试集上的 8 组对照（脚本 `train_fer_compare.py`）：
+留出测试集上的 8 组对照（脚本 `src/train_fer_compare.py`）：
 
 | 设置 | Accuracy | Macro-F1 |
 |---|---:|---:|
@@ -116,7 +150,7 @@ frown / sad 仍是主要混淆来源。
 
 ### 与旧 CK+ 模型的同图对比
 
-同一批 479 张 FER2013 图像逐张对比（脚本 `compare_old_new.py`）：
+同一批 479 张 FER2013 图像逐张对比（脚本 `src/compare_old_new.py`）：
 
 | 真实类别 | 旧 CK+ 模型 | 新 FER2013 模型 |
 |---|---:|---:|
@@ -142,24 +176,33 @@ CK+ 上的 83.80% 来自摆拍、夸张、正面的库内数据，不能代表�
 
 这些结果只描述本地关键点数据，不是摄像头实测准确率，也不是整个 CK+ 数据集的通用基准。
 合成的 `dataset.csv` 仅用于流程测试，不能用来证明真实识别效果。
-详细问题、混淆矩阵及改进方向见 [AUDIT.md](AUDIT.md)。
+详细问题、混淆矩阵及改进方向见 [docs/AUDIT.md](docs/AUDIT.md)。
 
 ## 采集与训练
 
 用独立文件采集真实数据，避免与合成数据混用。不同人员使用不同 ID，同一人员不同拍摄仍使用同一 ID。
 
 ```powershell
-python collect_and_train.py --action collect --subject person01 --csv data/custom.csv
+python src\collect_and_train.py --action collect --subject person01 --csv data/custom.csv
 # 至少两位人员，建议覆盖更多人员、光照、姿态与拍摄时段
-python collect_and_train.py --action train --csv data/custom.csv --model_type svm --save custom_svm.pkl
-python collect_and_train.py --action train --csv data/custom.csv --model_type mlp --save custom_mlp.pkl
+python src\collect_and_train.py --action train --csv data/custom.csv --model_type svm --save models/custom_svm.pkl
+python src\collect_and_train.py --action train --csv data/custom.csv --model_type mlp --save models/custom_mlp.pkl
 ```
 
 采集按键：1 自然、2 微笑、3 惊讶、4 皱眉、5 难过；Q 保存并退出。
 CSV 必须包含 `subject_id`、`label`、按顺序排列的 `feat_0` 至 `feat_135`。
 通过合规渠道取得原始 CK+ 数据后，可自行使用 `extract_ck_landmarks.py` 提取。
+`--save` 不指定时默认写入 `models/custom_model.pkl`。
 
 ## 项目文件
+
+**入口脚本（项目根目录）**
+
+- `run_demo.bat`：菜单式总入口（摄像头 / 离线视频 / 特征提取 / 对照实验 / 同图对比 / 自检 / 下载模型）。
+- `run_offline_demo.bat`：一键离线视频演示，不需要摄像头。
+- `start_camera_demo.bat`、`启动实时摄像头演示.bat`：一键摄像头演示。
+
+**源码 `src/`**
 
 - `feature_extractor.py`：MediaPipe 特征、几何指标、PnP 头部姿态。
 - `classifier.py`：规则推理、SVM / MLP 训练与跨人评测；按模型声明的特征集自动组装输入向量。
@@ -171,27 +214,36 @@ CSV 必须包含 `subject_id`、`label`、按顺序排列的 `feat_0` 至 `feat_
 - `tune_fer.py`：SVM (C, gamma) 与特征组合的定向调参。
 - `finalize_fer.py`：按最优配置重训部署模型，并做端到端链路验证。
 - `compare_old_new.py`：同一批图像上旧 CK+ 模型与新 FER2013 模型的逐张对比。
-- `make_demo_video.py`：用 FER2013 留出图像合成免摄像头的 `example.mp4`。
+- `make_demo_video.py`：用 FER2013 留出图像合成免摄像头的 `assets/example.mp4`。
 - `test_pipeline.py`：回归测试；不宣称验证真实表情准确率。
 - `download_model.py`：官方 FaceLandmarker 模型下载和校验。
-- `run_demo.bat`：菜单式入口；`run_offline_demo.bat`：一键离线视频演示（不需要摄像头）。
+
+**模型 `models/`**
+
+- `face_landmarker.task`：MediaPipe 关键点检测模型。
 - `model_fer_svm.pkl`、`model_fer_mlp.pkl`：FER2013 5 类模型，**当前默认推荐**。
 - `model_svm.pkl`、`model_mlp.pkl`：旧 CK+ 5 类模型（无 neutral），保留作对比基线。
+
+**数据与文档**
+
+- `data/`：特征 CSV、FER2013 原始 parquet、评测 JSON；说明见 [data/README.md](data/README.md)。
+- `docs/AUDIT.md`、`docs/RESULTS_FER2013.md`：问题清单与完整结果记录。
+- `assets/example.mp4`：离线演示视频。
 
 ## 复现 FER2013 全流程
 
 ```powershell
 # 1. 提取特征（首次会从 hf-mirror 镜像下载 FER2013 原始 parquet，约 133MB）
-python extract_fer_landmarks.py
+python src\extract_fer_landmarks.py
 # 2. 8 组设置对照实验（留出 publicTest+privateTest）
-python train_fer_compare.py
+python src\train_fer_compare.py
 # 3. 重训部署模型并做端到端验证
-python finalize_fer.py
+python src\finalize_fer.py
 # 4. 与旧 CK+ 模型同图对比
-python compare_old_new.py
+python src\compare_old_new.py
 
 # 用新模型跑摄像头
-python realtime_demo.py --source 0 --model model_fer_svm.pkl --engine ml
+python src\realtime_demo.py --source 0 --model models\model_fer_svm.pkl --engine ml
 ```
 
 注：`huggingface.co` 在当前网络下不可达，脚本通过 `hf-mirror.com` 镜像获取数据。

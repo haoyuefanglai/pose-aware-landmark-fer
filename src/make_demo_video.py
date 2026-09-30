@@ -3,7 +3,7 @@ make_demo_video.py
 用 FER2013 留出图像合成一段离线演示视频 example.mp4。
 
 用途：摄像头不可用时，realtime_demo.py 可以直接读这段视频做完整演示：
-    python realtime_demo.py --source example.mp4 --model model_fer_svm.pkl --engine ml
+    python src/realtime_demo.py --source assets/example.mp4 --model models/model_fer_svm.pkl --engine ml
 
 画面右下角烧录的是数据集真实标签 (GT)，窗口 HUD 上显示的是模型预测，
 两者可以直接肉眼对照，不需要任何摄像头或外部视频素材。
@@ -16,7 +16,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 FER_NAMES = {0: "angry", 1: "disgust", 2: "fear", 3: "happy",
              4: "sad", 5: "surprise", 6: "neutral"}
 LMAP = {"angry": "frown", "happy": "smile", "sad": "sad",
@@ -24,7 +25,7 @@ LMAP = {"angry": "frown", "happy": "smile", "sad": "sad",
 
 
 def find_parquet(split_hint):
-    raw = os.path.join(HERE, "data", "fer2013_raw")
+    raw = os.path.join(ROOT_DIR, "data", "fer2013_raw")
     hits = []
     for dp, _, fs in os.walk(raw):
         for f in fs:
@@ -111,7 +112,7 @@ def verify(out_path):
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="生成免摄像头的离线演示视频")
-    ap.add_argument("--out", default=os.path.join(HERE, "example.mp4"))
+    ap.add_argument("--out", default=os.path.join(ROOT_DIR, "assets", "example.mp4"))
     ap.add_argument("--per-class", type=int, default=8, help="每个表情类别取多少张图")
     ap.add_argument("--frames", type=int, default=12, help="每张图持续多少帧")
     ap.add_argument("--fps", type=int, default=20)
@@ -127,5 +128,5 @@ if __name__ == "__main__":
     print(f"    分辨率 {w}x{h} @ {fps:.0f} fps，时长约 {n / max(fps, 1):.1f} 秒，"
           f"文件 {size_mb:.2f} MB，可读={ok}")
     print("\n[Done] 免摄像头运行方式：")
-    print(f"    python realtime_demo.py --source {os.path.basename(a.out)} "
-          f"--model model_fer_svm.pkl --engine ml")
+    print(f"    python src/realtime_demo.py --source assets/{os.path.basename(a.out)} "
+          f"--model models/model_fer_svm.pkl --engine ml")

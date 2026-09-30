@@ -43,8 +43,9 @@ MODEL_POINTS_3D = np.array([
     (150.0, -150.0, -125.0)   # 左嘴角 (MediaPipe 291)
 ], dtype=np.float64)
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_MODEL_PATH = os.path.join(CURRENT_DIR, "models", "face_landmarker.task")
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
+DEFAULT_MODEL_PATH = os.path.join(ROOT_DIR, "models", "face_landmarker.task")
 
 
 class FaceFeatureExtractor:
@@ -54,7 +55,7 @@ class FaceFeatureExtractor:
         if model_asset_path is None:
             model_asset_path = DEFAULT_MODEL_PATH
         elif not os.path.isabs(model_asset_path):
-            model_asset_path = os.path.join(CURRENT_DIR, model_asset_path)
+            model_asset_path = os.path.join(ROOT_DIR, model_asset_path)
 
         # 确保模型文件存在
         if not os.path.exists(model_asset_path):

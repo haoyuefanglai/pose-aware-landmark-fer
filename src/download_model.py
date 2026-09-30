@@ -7,7 +7,7 @@ URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_land
 SHA256 = '64184e229b263107bc2b804c6625db1341ff2bb731874b0bcc2fe6544e0bc9ff'
 
 def main():
-    target = Path(__file__).resolve().parent / 'models' / 'face_landmarker.task'
+    target = Path(__file__).resolve().parent.parent / 'models' / 'face_landmarker.task'
     if target.exists() and hashlib.sha256(target.read_bytes()).hexdigest() == SHA256:
         print('FaceLandmarker model already installed and verified.')
         return

@@ -27,9 +27,10 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (accuracy_score, f1_score, recall_score,
                              confusion_matrix, classification_report)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
-CSV = os.path.join(HERE, "data", "fer2013_landmarks.csv")
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
+sys.path.insert(0, SRC_DIR)
+CSV = os.path.join(ROOT_DIR, "data", "fer2013_landmarks.csv")
 CLASSES = ["neutral", "smile", "surprise", "frown", "sad"]
 
 print(">>> [0/4] 读取特征表")
@@ -113,29 +114,29 @@ joblib.dump(dict(model=svm_clf, classes=list(svm_clf.classes_), type="svm",
                  hyperparams={"C": 10.0, "gamma": "scale"},
                  holdout_accuracy=svm_m["acc"], holdout_macro_f1=svm_m["macro_f1"],
                  holdout_recalls=svm_m["recalls"], **common),
-            os.path.join(HERE, "model_fer_svm.pkl"))
+            os.path.join(ROOT_DIR, "models", "model_fer_svm.pkl"))
 joblib.dump(dict(model=mlp_clf, classes=[str(c) for c in mlp_clf.classes_], type="mlp",
                  feature_set="coords", uses_blendshape=False, scaled_pipeline=False,
                  hyperparams={"hidden_layer_sizes": [128, 64], "max_iter": 300},
                  holdout_accuracy=mlp_m["acc"], holdout_macro_f1=mlp_m["macro_f1"],
                  holdout_recalls=mlp_m["recalls"], **common),
-            os.path.join(HERE, "model_fer_mlp.pkl"))
+            os.path.join(ROOT_DIR, "models", "model_fer_mlp.pkl"))
 for f in ("model_fer_svm.pkl", "model_fer_mlp.pkl"):
-    print(f"  [Saved] {f}  {os.path.getsize(os.path.join(HERE, f))/1e6:.1f}MB")
+    print(f"  [Saved] {f}  {os.path.getsize(os.path.join(ROOT_DIR, 'models', f))/1e6:.1f}MB")
 
 print("\n>>> [4/4] 端到端链路验证（真实图像 -> MediaPipe -> 分类器）")
 from feature_extractor import FaceFeatureExtractor
 from classifier import ExpressionClassifier
 
-raw = os.path.join(HERE, "data", "fer2013_raw")
+raw = os.path.join(ROOT_DIR, "data", "fer2013_raw")
 pq = [os.path.join(dp, f) for dp, _, fs in os.walk(raw) for f in fs
       if f.endswith(".parquet") and "publicTest" in f]
 if not pq:
     raise FileNotFoundError(f"未找到 publicTest parquet，请先运行 extract_fer_landmarks.py（查找目录: {raw}）")
 sample = pd.read_parquet(pq[0]).head(200)
 ex = FaceFeatureExtractor(static_mode=True)
-svm_live = ExpressionClassifier(os.path.join(HERE, "model_fer_svm.pkl"))
-mlp_live = ExpressionClassifier(os.path.join(HERE, "model_fer_mlp.pkl"))
+svm_live = ExpressionClassifier(os.path.join(ROOT_DIR, "models", "model_fer_svm.pkl"))
+mlp_live = ExpressionClassifier(os.path.join(ROOT_DIR, "models", "model_fer_mlp.pkl"))
 
 FER_NAMES = {0: "angry", 1: "disgust", 2: "fear", 3: "happy", 4: "sad", 5: "surprise", 6: "neutral"}
 LMAP = {"angry": "frown", "happy": "smile", "sad": "sad", "surprise": "surprise", "neutral": "neutral"}
@@ -176,6 +177,6 @@ out = dict(labels=labels, train_size=int(tr.sum()), holdout_size=int(te.sum()),
                           constant_cols=int(np.sum(V.std(axis=0) < 1e-9)), n_dims=len(vis_cols)),
            e2e=dict(n=int(tot), svm_accuracy=float(svm_hit / tot), mlp_accuracy=float(mlp_hit / tot)),
            generated_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-with open(os.path.join(HERE, "data", "fer2013_final.json"), "w", encoding="utf-8") as f:
+with open(os.path.join(ROOT_DIR, "data", "fer2013_final.json"), "w", encoding="utf-8") as f:
     json.dump(out, f, ensure_ascii=False, indent=2)
-print("    ", os.path.join(HERE, "data", "fer2013_final.json"))
+print("    ", os.path.join(ROOT_DIR, "data", "fer2013_final.json"))

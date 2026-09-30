@@ -3,8 +3,8 @@ cd /d "%~dp0"
 echo ========================================================
 echo   Offline Demo  -  NO CAMERA REQUIRED
 echo ========================================================
-echo   Input : example.mp4  (samples from FER2013 test split)
-echo   Engine: model_fer_svm.pkl  (5 classes, includes neutral)
+echo   Input : assets\example.mp4  (samples from FER2013 test split)
+echo   Engine: models\model_fer_svm.pkl  (5 classes, includes neutral)
 echo   Keys  : Q quit / M mesh / T engine / S snapshot
 echo ========================================================
 echo.
@@ -29,14 +29,14 @@ if errorlevel 1 (
     echo.
 )
 
-if not exist "example.mp4" (
-    echo [Info] example.mp4 not found, generating it from FER2013 test images...
-    %PY% make_demo_video.py
+if not exist "assets\example.mp4" (
+    echo [Info] assets\example.mp4 not found, generating it from FER2013 test images...
+    %PY% src\make_demo_video.py
     echo.
 )
 
-echo Launching offline demo on example.mp4 ...
-%PY% realtime_demo.py --source example.mp4 --model model_fer_svm.pkl --engine ml --window 5
+echo Launching offline demo on assets\example.mp4 ...
+%PY% src\realtime_demo.py --source assets\example.mp4 --model models\model_fer_svm.pkl --engine ml --window 5
 
 echo.
 echo Demo finished.

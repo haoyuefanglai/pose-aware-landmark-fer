@@ -24,7 +24,8 @@ from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, f1_score, recall_score, confusion_matrix, classification_report
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 CLASSES = ["neutral", "smile", "surprise", "frown", "sad"]
 
 
@@ -61,7 +62,7 @@ def score(clf, X, y, labels, folds=3, seed=42):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default=os.path.join(HERE, "data", "fer2013_landmarks.csv"))
+    ap.add_argument("--csv", default=os.path.join(ROOT_DIR, "data", "fer2013_landmarks.csv"))
     ap.add_argument("--probe-size", type=int, default=8000)
     ap.add_argument("--folds", type=int, default=3)
     args = ap.parse_args()
@@ -135,10 +136,10 @@ def main():
           f"Macro-F1={mlp_metrics['macro_f1']:.4f}  用时={mlp_metrics['fit_seconds']}s")
     print("  各类 Recall:", {k: round(v * 100, 1) for k, v in mlp_metrics["recalls"].items()})
 
-    # ---- 保存到项目根目录（与 model_svm.pkl 同级）----
+    # ---- 保存到 models/ 目录（与随仓库提供的 model_svm.pkl 同级）----
     for name, model, mtype, m in (("model_fer_svm.pkl", svm, "svm", svm_metrics),
                                   ("model_fer_mlp.pkl", mlp, "mlp", mlp_metrics)):
-        path = os.path.join(HERE, name)
+        path = os.path.join(ROOT_DIR, "models", name)
         clf_classes = list(model.classes_)
         joblib.dump({
             "model": model,
@@ -160,7 +161,7 @@ def main():
         print(f"[Saved] {path}  classes={clf_classes}  feature_set={best['feature_set']}")
 
     report = classification_report(y_te, pred, labels=labels, digits=4, zero_division=0)
-    with open(os.path.join(HERE, "data", "fer2013_tuned_report.txt"), "w", encoding="utf-8") as f:
+    with open(os.path.join(ROOT_DIR, "data", "fer2013_tuned_report.txt"), "w", encoding="utf-8") as f:
         f.write(f"best config: {best}\n\n=== SVM tuned ===\n{report}\n")
         f.write("confusion matrix (rows=true, cols=pred):\n")
         f.write(pd.DataFrame(svm_metrics["cm"], index=labels, columns=labels).to_string())
@@ -171,9 +172,9 @@ def main():
 
     out = dict(labels=labels, grid=grid, best=best, svm=svm_metrics, mlp=mlp_metrics,
                generated_at=time.strftime("%Y-%m-%d %H:%M:%S"))
-    with open(os.path.join(HERE, "data", "fer2013_tuned.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(ROOT_DIR, "data", "fer2013_tuned.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
-    print("\n[Done]", os.path.join(HERE, "data", "fer2013_tuned.json"))
+    print("\n[Done]", os.path.join(ROOT_DIR, "data", "fer2013_tuned.json"))
 
 
 if __name__ == "__main__":

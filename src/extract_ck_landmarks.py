@@ -12,7 +12,11 @@ import pandas as pd
 from tqdm import tqdm
 from feature_extractor import FaceFeatureExtractor
 
-def batch_extract_ck(parquet_path="data/ck_raw.parquet", output_csv="data/ck_plus_landmarks.csv"):
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
+
+def batch_extract_ck(parquet_path=os.path.join(ROOT_DIR, "data", "ck_raw.parquet"),
+                     output_csv=os.path.join(ROOT_DIR, "data", "ck_plus_landmarks.csv")):
     if not os.path.exists(parquet_path):
         print(f"[Error] 未找到数据源: {parquet_path}")
         return

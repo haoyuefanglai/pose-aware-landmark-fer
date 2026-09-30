@@ -28,5 +28,5 @@ MediaPipe FaceLandmarker 输出的 68 个点**全部为 0**（68/68 列恒为常
 报告中的 CK+ 指标无法用当前仓库复现。
 
 For a usable neutral class, collect real samples from multiple consenting subjects:
-`python collect_and_train.py --action collect --subject person01 --csv data/custom.csv`
+`python src/collect_and_train.py --action collect --subject person01 --csv data/custom.csv`
 Use a new subject ID for each person and repeat across lighting, head poses and sessions.

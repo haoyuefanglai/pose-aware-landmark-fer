@@ -16,8 +16,12 @@ import cv2
 from feature_extractor import FaceFeatureExtractor
 from classifier import train_and_evaluate, EXPRESSION_CLASSES, EXPRESSION_NAMES_ZH
 
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
+DEFAULT_CSV = os.path.join(ROOT_DIR, "data", "dataset.csv")
 
-def generate_sample_dataset(csv_path="data/dataset.csv", n_subjects=6, samples_per_class=20):
+
+def generate_sample_dataset(csv_path=DEFAULT_CSV, n_subjects=6, samples_per_class=20):
     """
     生成符合真实面部解剖学分布的标准化样例数据集 (用于快速验证整个训练流水线)
     包含 subject_id，满足 GroupKFold 跨受试者评测标准
@@ -75,7 +79,7 @@ def generate_sample_dataset(csv_path="data/dataset.csv", n_subjects=6, samples_p
     return csv_path
 
 
-def interactive_collect(subject_id="Subject_01", csv_path="data/dataset.csv"):
+def interactive_collect(subject_id="Subject_01", csv_path=DEFAULT_CSV):
     """
     通过摄像头实时交互采集组员个人表情数据，自动写入 subject_id 与归一化特征
     按键盘 [1-5] 录入对应表情，[Q] 退出
@@ -162,9 +166,10 @@ if __name__ == "__main__":
     parser.add_argument("--action", choices=["gen_sample", "collect", "train"], default="gen_sample",
                         help="操作类型: gen_sample(生成演示数据), collect(摄像头采集), train(训练对比模型)")
     parser.add_argument("--subject", default="Subject_01", help="采集时指定的受试者编号")
-    parser.add_argument("--csv", default="data/dataset.csv", help="数据集路径")
+    parser.add_argument("--csv", default=DEFAULT_CSV, help="数据集路径（默认 data/dataset.csv）")
     parser.add_argument("--model_type", default="svm", choices=["svm", "mlp"], help="训练模型类型: svm 或 mlp")
-    parser.add_argument("--save", default="model_svm.pkl", help="模型权重保存路径")
+    parser.add_argument("--save", default=os.path.join(ROOT_DIR, "models", "custom_model.pkl"),
+                        help="模型权重保存路径（默认存到 models/ 目录）")
     args = parser.parse_args()
 
     if args.action == "gen_sample":

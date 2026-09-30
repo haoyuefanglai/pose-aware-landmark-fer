@@ -39,7 +39,8 @@ SPLIT_FILES = {
     "privateTest": "data/privateTest-00000-of-00001-4b8a0715cf1b7560.parquet",
 }
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 
 
 def download_splits(raw_dir):
@@ -84,8 +85,8 @@ def decode_image(cell):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--raw-dir", default=os.path.join(HERE, "data", "fer2013_raw"))
-    ap.add_argument("--out", default=os.path.join(HERE, "data", "fer2013_landmarks.csv"))
+    ap.add_argument("--raw-dir", default=os.path.join(ROOT_DIR, "data", "fer2013_raw"))
+    ap.add_argument("--out", default=os.path.join(ROOT_DIR, "data", "fer2013_landmarks.csv"))
     ap.add_argument("--limit", type=int, default=0, help="每个划分最多处理多少张（0=全部，用于快速试跑）")
     ap.add_argument("--decimals", type=int, default=5)
     args = ap.parse_args()
@@ -129,7 +130,7 @@ def main():
 
                 if bs_names is None:
                     bs_names = sorted(res["blendshapes"].keys())
-                    with open(os.path.join(HERE, "data", "fer_blendshape_names.json"), "w",
+                    with open(os.path.join(ROOT_DIR, "data", "fer_blendshape_names.json"), "w",
                               encoding="utf-8") as f:
                         json.dump(bs_names, f, ensure_ascii=False, indent=2)
                     print(f"    捕获到 {len(bs_names)} 维 blendshape 名称")
@@ -197,7 +198,7 @@ def main():
         "blendshape_dims": len(bs_names or []),
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
-    with open(os.path.join(HERE, "data", "fer2013_meta.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(ROOT_DIR, "data", "fer2013_meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
 
 

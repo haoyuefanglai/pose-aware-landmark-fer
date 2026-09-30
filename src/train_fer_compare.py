@@ -31,7 +31,8 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import (accuracy_score, f1_score, recall_score,
                              confusion_matrix, classification_report)
 
-HERE = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 CLASSES = ["neutral", "smile", "surprise", "frown", "sad"]
 
 
@@ -103,8 +104,8 @@ def evaluate(clf, Xtr, ytr, Xte, yte, labels):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--csv", default=os.path.join(HERE, "data", "fer2013_landmarks.csv"))
-    ap.add_argument("--out-dir", default=os.path.join(HERE, "data"))
+    ap.add_argument("--csv", default=os.path.join(ROOT_DIR, "data", "fer2013_landmarks.csv"))
+    ap.add_argument("--out-dir", default=os.path.join(ROOT_DIR, "data"))
     ap.add_argument("--max-train", type=int, default=0, help="限制训练样本数（调试用）")
     args = ap.parse_args()
 
@@ -182,7 +183,8 @@ def main():
     deploy_pool = [r for r in results if "roll" not in r["feature_set"]]
     deploy_best = max(deploy_pool, key=lambda r: r["macro_f1"])
     print(f"\n[Deploy] 部署配置按 Macro-F1 选为: {deploy_best['name']}")
-    deploy_dir = args.out_dir
+    deploy_dir = os.path.join(ROOT_DIR, "models")
+    os.makedirs(deploy_dir, exist_ok=True)
     for mtype, fname in (("svm", "model_fer_svm.pkl"), ("mlp", "model_fer_mlp.pkl")):
         cfg = next((r for r in deploy_pool if r["model"] == mtype
                     and r["feature_set"] == deploy_best["feature_set"]

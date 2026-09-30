@@ -25,7 +25,8 @@ EXPRESSION_NAMES_ZH = {
     "disgust": "厌恶 (Disgust)"
 }
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
 
 class ExpressionClassifier:
     """表情分类推理器"""
@@ -38,10 +39,15 @@ class ExpressionClassifier:
         self.bl_names = None
 
         if model_path:
-            if not os.path.isabs(model_path):
-                resolved_path = os.path.join(CURRENT_DIR, model_path)
-            else:
+            if os.path.isabs(model_path):
                 resolved_path = model_path
+            else:
+                # 依次在 项目根目录 / models子目录 / src目录 下查找
+                # 因此 "model_fer_svm.pkl" 与 "models/model_fer_svm.pkl" 两种写法都能命中
+                candidates = [os.path.join(ROOT_DIR, model_path),
+                              os.path.join(ROOT_DIR, "models", model_path),
+                              os.path.join(SRC_DIR, model_path)]
+                resolved_path = next((p for p in candidates if os.path.exists(p)), candidates[0])
 
             if os.path.exists(resolved_path):
                 self.load_model(resolved_path)
@@ -63,7 +69,7 @@ class ExpressionClassifier:
                                              ("bl" in fs) or ("blendshape" in fs)))
         self.bl_names = None
         if self.uses_blendshape:
-            meta = os.path.join(CURRENT_DIR, "data", "fer_blendshape_names.json")
+            meta = os.path.join(ROOT_DIR, "data", "fer_blendshape_names.json")
             if os.path.exists(meta):
                 with open(meta, "r", encoding="utf-8") as f:
                     self.bl_names = json.load(f)

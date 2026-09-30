@@ -13,8 +13,9 @@ import pandas as pd
 import cv2
 import joblib
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, HERE)
+SRC_DIR = os.path.dirname(os.path.abspath(__file__))            # src/
+ROOT_DIR = os.path.dirname(SRC_DIR)                              # 项目根目录
+sys.path.insert(0, SRC_DIR)
 from feature_extractor import FaceFeatureExtractor
 from classifier import ExpressionClassifier
 
@@ -24,7 +25,7 @@ LMAP = {"angry": "frown", "happy": "smile", "sad": "sad",
         "surprise": "surprise", "neutral": "neutral"}
 
 print(">>> 旧模型元数据")
-old_meta = joblib.load(os.path.join(HERE, "model_svm.pkl"))
+old_meta = joblib.load(os.path.join(ROOT_DIR, "models", "model_svm.pkl"))
 print("    classes =", old_meta.get("classes"))
 print("    feature_set =", old_meta.get("feature_set", "<未声明，按坐标136维处理>"))
 print("    training_samples =", old_meta.get("training_samples"),
@@ -32,7 +33,7 @@ print("    training_samples =", old_meta.get("training_samples"),
 print("    cv_accuracy =", old_meta.get("cv_accuracy"), " cv_macro_f1 =", old_meta.get("cv_macro_f1"))
 
 print("\n>>> 采样 FER2013 publicTest 图像（每类均匀取样）")
-raw = os.path.join(HERE, "data", "fer2013_raw")
+raw = os.path.join(ROOT_DIR, "data", "fer2013_raw")
 pq = [os.path.join(dp, f) for dp, _, fs in os.walk(raw) for f in fs
       if f.endswith(".parquet") and "publicTest" in f][0]
 df = pd.read_parquet(pq)
@@ -46,8 +47,8 @@ sample = pd.concat(picked)
 print(f"    取到 {len(sample)} 张，覆盖 FER2013 全部 7 个原始类别")
 
 extractor = FaceFeatureExtractor(static_mode=True)
-old = ExpressionClassifier(os.path.join(HERE, "model_svm.pkl"))
-new = ExpressionClassifier(os.path.join(HERE, "model_fer_svm.pkl"))
+old = ExpressionClassifier(os.path.join(ROOT_DIR, "models", "model_svm.pkl"))
+new = ExpressionClassifier(os.path.join(ROOT_DIR, "models", "model_fer_svm.pkl"))
 
 rows = []
 for _, row in sample.iterrows():
@@ -118,6 +119,6 @@ out = dict(n=int(len(R)), per_class=cmp_rows,
                old_neutral_rate=float((neut['old'] == 'neutral').mean()),
                new_neutral_rate=float((neut['new'] == 'neutral').mean())),
            mean_confidence=dict(old=float(R['old_conf'].mean()), new=float(R['new_conf'].mean())))
-with open(os.path.join(HERE, "data", "old_vs_new.json"), "w", encoding="utf-8") as f:
+with open(os.path.join(ROOT_DIR, "data", "old_vs_new.json"), "w", encoding="utf-8") as f:
     json.dump(out, f, ensure_ascii=False, indent=2)
-print("\n[Done]", os.path.join(HERE, "data", "old_vs_new.json"))
+print("\n[Done]", os.path.join(ROOT_DIR, "data", "old_vs_new.json"))

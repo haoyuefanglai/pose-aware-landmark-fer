@@ -95,7 +95,7 @@ def draw_hud(frame, feat_res, pred_label, conf, smoothed_probs, fps, show_mesh=T
                 cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 180, 180), 1)
 
 
-def run_pipeline(source=0, model_path="model_svm.pkl", window_size=7, engine="rules"):
+def run_pipeline(source=0, model_path="models/model_svm.pkl", window_size=7, engine="rules"):
     if window_size < 1:
         raise ValueError("window_size must be positive")
     """运行实时检测主循环"""
@@ -130,7 +130,7 @@ def run_pipeline(source=0, model_path="model_svm.pkl", window_size=7, engine="ru
         extractor.close()
         print(f"\n[Error] 无法打开输入源: {source}。")
         print("[提示] 若当前环境无物理摄像头，请传入测试视频路径，例如:")
-        print("       python realtime_demo.py --source test_video.mp4")
+        print("       python src/realtime_demo.py --source assets/example.mp4 --model models/model_fer_svm.pkl --engine ml")
         return
 
     if isinstance(source, int):
@@ -236,7 +236,7 @@ def run_pipeline(source=0, model_path="model_svm.pkl", window_size=7, engine="ru
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="实时人脸关键点与表情识别系统")
     parser.add_argument("--source", default=0, help="视频输入源 (0 代表默认摄像头，也可传入 mp4 视频文件路径)")
-    parser.add_argument("--model", default="model_svm.pkl", help="机器学习模型文件 (.pkl)")
+    parser.add_argument("--model", default="models/model_svm.pkl", help="机器学习模型文件 (.pkl)，相对路径按项目根目录解析")
     parser.add_argument("--window", type=int, default=7, help="滑动平均平滑窗口大小 (默认 7 帧)")
     parser.add_argument("--engine", choices=["rules", "ml"], default="rules", help="显式选择规则或机器学习引擎")
     args = parser.parse_args()
