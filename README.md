@@ -15,28 +15,33 @@ pose-aware-landmark-fer/
 ├── requirements-tested.txt
 ├── src/                         Python 源码，按职责分为四个子目录
 │   ├── core/                        核心算法库（被其它脚本 import，不直接运行）
-│   │   ├── feature_extractor.py         MediaPipe 关键点、几何指标、头部姿态角
-│   │   └── classifier.py                规则推理、SVM / MLP 训练与评测、输入向量组装
+│   │   ├── feature_extractor.py         MediaPipe 关键点、几何指标、头部姿态角、逐点几何可见性
+│   │   ├── frame_recorder.py            逐帧记录与视频级汇总（演示与评测共用同一口径）
+│   │   └── classifier.py                规则推理、SVM / MLP 训练与评测、输入向量组装、拒识
 │   ├── pipeline/                    数据管线：原始数据 → 特征表
-│   │   ├── extract_fer_landmarks.py     FER2013 下载与特征提取
-│   │   ├── extract_ck_landmarks.py      CK+ 特征提取（历史基线）
-│   │   └── recalc_pose_columns.py       用修复后的姿态解算重算特征表三列
+│   │   ├── extract_fer_landmarks.py     FER2013 下载与特征提取（含可见性）
+│   │   ├── extract_ck_landmarks.py      CK+ 特征提取（含 subject_id / clip_id）
+│   │   ├── recalc_pose_columns.py       用修复后的姿态解算重算特征表三列
+│   │   └── recalc_visibility_columns.py 重算特征表可见性列（逐行对齐校验 + .bak 备份）
 │   ├── experiments/                 训练与评测，报告里的数字都出自这里
 │   │   ├── train_fer_compare.py         8 组设置对照实验
 │   │   ├── strict_eval.py               两阶段严格评测（选型与出数分离）
+│   │   ├── calibrate_model.py           概率校准（Platt）+ 拒识阈值标定
+│   │   ├── evaluate_video.py            视频逐帧评测（姿态/可见性/时序稳定性出数）
 │   │   ├── tune_fer.py                  SVM (C, gamma) 定向调参
 │   │   ├── finalize_fer.py              重训部署模型 + 端到端链路验证
 │   │   ├── compare_old_new.py           新旧模型同图逐张对比
 │   │   └── pose_stability_test.py       姿态 / 光照 / 距离 / 旋转稳定性测试（任务C）
 │   └── apps/                        可直接运行的入口脚本
-│       ├── realtime_demo.py             摄像头 / 视频实时演示
-│       ├── collect_and_train.py         交互式样本采集与训练
+│       ├── realtime_demo.py             摄像头 / 视频实时演示（可 --record-csv 逐帧落盘）
+│       ├── collect_and_train.py         交互式样本采集与训练（含 session/clip 字段）
 │       ├── make_demo_video.py           合成免摄像头的离线演示视频
 │       ├── download_model.py            下载并校验 FaceLandmarker 模型
 │       └── test_pipeline.py             7 项回归测试
 ├── models/                      模型权重
 │   ├── face_landmarker.task         MediaPipe 关键点模型，3.7MB
 │   ├── model_fer_svm.pkl            FER2013 5 类部署模型，当前默认，22MB
+│   ├── model_fer_svm_calibrated.pkl 同上但经 Platt 校准 + 带拒识阈值（由 calibrate_model.py 产出）
 │   ├── model_fer_mlp.pkl            FER2013 5 类 MLP
 │   ├── model_svm.pkl                旧 CK+ SVM，仅作对比基线
 │   └── model_mlp.pkl                旧 CK+ MLP，仅作对比基线
@@ -45,7 +50,10 @@ pose-aware-landmark-fer/
 │   ├── fer2013_raw/                 FER2013 原始 parquet，133MB
 │   ├── fer_blendshape_names.json    52 维 blendshape 的名称与顺序
 │   ├── fer2013_strict_*.json/txt    两阶段严格评测结果
-│   ├── pose_stability_results.json  稳定性测试结果
+│   ├── fer2013_calibration.json     概率校准与拒识阈值标定结果
+│   ├── video_eval_summary.json      视频逐帧评测汇总
+│   ├── video_eval_frames_*.csv      视频逐帧记录（每帧的姿态/可见性/预测/分数）
+│   └── pose_stability_results.json  稳定性测试结果
 │   └── fer2013_*.json / *.txt       评测记录与混淆矩阵
 ├── docs/                        报告文档与图表
 │   ├── AUDIT.md                     已知问题、混淆矩阵与改进方向
@@ -93,7 +101,7 @@ python src/apps/realtime_demo.py --source assets\example.mp4 --model models\mode
 python src/apps/test_pipeline.py
 ```
 
-快捷键：Q / ESC 退出，M 显示关键点，T 切换引擎，S 保存截图。
+快捷键：Q / ESC 退出，M 显示关键点，T 切换引擎，S 保存截图，R 重置时序平滑窗口。
 也可双击 `run_demo.bat`。选择训练需要事先准备本地数据。
 
 ## 不开摄像头怎么运行
@@ -134,11 +142,122 @@ python src/apps/make_demo_video.py --per-class 8 --frames 12 --fps 20
 | 引擎 | 类别 | 注意事项 |
 |---|---|---|
 | rules（默认） | 自然、微笑、惊讶、皱眉、难过 | 手工 blendshape / 几何规则，分数未经概率校准 |
-| ml · `model_fer_svm.pkl` | 自然、微笑、惊讶、皱眉、难过 | FER2013 重训，与规则引擎类别一致 |
+| ml · `model_fer_svm.pkl` | 自然、微笑、惊讶、皱眉、难过 | FER2013 重训，与规则引擎类别一致；置信度为**未校准相对分数** |
+| ml · `model_fer_svm_calibrated.pkl` | 同上 | 同一 SVM 经 Platt 校准，置信度可当概率读，并带低置信拒识（显示 UNKNOWN） |
 | ml · `model_svm.pkl`（旧 CK+） | 厌恶、皱眉、难过、微笑、惊讶 | **没有自然类**，平静表情也会被分入五类之一 |
 
 两个引擎的类别集合现已一致，按 T 切换引擎不会再改变标签集合。
 规则分数和模型概率均不代表已经验证的正确率。旧 CK+ 模型没有自然类，不能通过调整阈值补出这个类别。
+
+## 可见性、校准、视频评测与划分（任务A / 任务C 的代码环节）
+
+### 关键点可见性（任务A）
+
+MediaPipe FaceLandmarker 的 478 点输出里 `visibility` / `presence` **恒为 None**，
+早期实现用 `getattr(..., 0.0)` 兜底，于是 `vis_0..vis_67` 被整列写成 0.0 ——
+列在、schema 在、信息量为零，而且不会报错。
+
+现在改为几何自遮挡估计：把关键点的归一化 x/y/z 当作相机坐标系下的 3D 点云，
+对每个目标点取最近邻做 PCA 拟合局部切平面得到法线，定向后做**背向判定**，
+可见性 = 法线与视线夹角的余弦（0 = 背对相机，1 = 正对相机）。
+全表 27,307 行实测：68 列**无一为常数**，单列取值数达 10⁴ 量级，
+`corr(|yaw|, 逐行平均可见性) = -0.545`；HUD 也新增了 `Vis Mean` 一行。
+
+```powershell
+# 只重算可见性列（带逐行对齐校验，写回前自动备份 .bak），约 8 分钟
+python src/pipeline/recalc_visibility_columns.py
+python src/pipeline/recalc_visibility_columns.py --limit 800   # 先小样本校验对齐逻辑
+```
+
+注意这是**几何自遮挡估计，不是模型置信度**；若需要模型原生的逐点置信度，
+需换用输出该字段的模型（如 HRFFA 的 ONNX 方案），本项目未内置对应权重。
+
+### 概率校准与低置信拒识
+
+原实现用 `SVC(probability=False)` 的 `decision_function` 手写 softmax，
+输出的是相对分数而**不是概率**，不能解释成"有多大把握"，也不能直接用于阈值拒识。
+
+```powershell
+# 比较 4 种校准口径 + 扫描拒识阈值，约 2.5 分钟
+python src/experiments/calibrate_model.py
+python src/experiments/calibrate_model.py --metric brier       # 换选型指标
+python src/experiments/calibrate_model.py --target-accuracy 0.80   # 换选阈值口径
+```
+
+协议延续 `strict_eval.py` 的三分离：train 拟合基础模型 → publicTest 前半拟合校准器 →
+publicTest 后半比较口径并选阈值 → **privateTest 只用于最终报告**。脚本会比较
+`uncalibrated / temperature / sigmoid / isotonic` 四种口径，按 proper scoring rule（默认 NLL）选型，
+并**把 ECE / Brier / NLL / 准确率四个指标全部打印**。输出 `models/model_fer_svm_calibrated.pkl`
+与 `data/fer2013_calibration.json`。
+
+privateTest（2,713 样本）上的实测：
+
+| 口径 | Accuracy | ECE | Brier | NLL |
+|---|---:|---:|---:|---:|
+| uncalibrated（原实现） | 69.81% | **0.0303** | 0.4670 | 0.9144 |
+| temperature (T=1.10) | 69.81% | 0.0624 | 0.4711 | 0.9167 |
+| sigmoid (Platt) | 70.00% | 0.0836 | 0.4713 | 0.9166 |
+| isotonic（选定） | 70.00% | 0.0654 | **0.4365** | **0.9055** |
+
+**两个结论要如实写进报告，不要只挑好看的指标**：
+1. ECE 与 NLL/Brier 的排序在这份数据上不一致 —— 未校准口径 ECE 最低，但 isotonic 的 NLL/Brier 最优。
+   ECE 只看最大概率的分箱偏差，是诊断量而非严格评分规则；脚本默认按 NLL 选型并显式打印这条提示。
+2. 手写 softmax 的分数本来就接近校准（温度缩放最优解 T≈1.10，几乎为 1），
+   所以校准的主要价值不是"提高准确率"，而是让数值**可以按把握解释**、让拒识阈值有明确含义。
+
+拒识权衡（isotonic，privateTest）：阈值 0.55 → 覆盖率 85.5%、被接受样本准确率 **74.57%**；
+阈值 0.65 → 覆盖率 56.8%、准确率 83.32%；阈值 0.75 → 覆盖率 30.0%、准确率 93.13%
+（不拒识时全量 70.00%）。
+
+运行时 HUD 会明确标注当前是 `Calibrated Probabilities` 还是
+`Relative Scores (uncalibrated)`，并在低于阈值时显示 `UNKNOWN`（拒识判定放在时序平滑之后，避免闪烁）。
+
+```powershell
+python src/apps/realtime_demo.py --engine ml --model models\model_fer_svm_calibrated.pkl
+python src/apps/realtime_demo.py --engine ml --model models\model_fer_svm_calibrated.pkl --reject-threshold 0  # 临时关闭拒识
+```
+
+### 视频逐帧评测（任务C 出数）
+
+原实现的实时链路只能"演示"：`realtime_demo.py` 只存截图，`pose_stability_test.py`
+的输入写死在 FER2013 静态图上，读不了视频文件。`evaluate_video.py` 补齐这条链路 ——
+一次遍历视频/摄像头，对每个引擎逐帧记录并汇总：
+
+```powershell
+# 无摄像头、无显示器也能跑完并出数
+python src/experiments/evaluate_video.py --source assets\example.mp4 --no-window
+python src/experiments/evaluate_video.py --source assets\example.mp4 --engines svm_calibrated --max-frames 300
+python src/experiments/evaluate_video.py --source 0 --show        # 摄像头实时
+```
+
+逐帧 CSV 含 `frame / time_s / detected / latency_ms / yaw / pitch / roll /
+vis_mean / vis_min / pred_raw / pred_smooth / score / rejected`；汇总 JSON 含检出率、
+单帧耗时（均值/P50/P95）、姿态分桶下的可见性与标签一致性、可见性与 |yaw| 的相关性、
+时序标签切换率与平均连续段长、拒识比例。演示脚本也可在演示的同时落盘：
+`python src/apps/realtime_demo.py --source 0 --record-csv data\live_frames.csv`。
+
+**帧处理模式（重要实测）**：`--frame-mode auto|image|video`，默认 auto ——
+摄像头用 VIDEO（跨帧跟踪），离线视频文件用 IMAGE（逐帧独立检测）。
+原因是实测 `assets/example.mp4`（40 张互不相关的静态图拼接、帧间硬切）：
+IMAGE 模式检出 444/530 = **83.8%**，VIDEO 模式因依赖帧间连续性只有 16.7%。
+这也说明 `static_mode` 不是一个"设了就更好"的开关，必须按输入源性质选择。
+
+### 训练 / 验证 / 测试的划分粒度
+
+`train_and_evaluate` 的分组列已泛化，可指定 `subject_id` / `session_id` / `clip_id`：
+
+```powershell
+# 采集时用 --session 指定拍摄时段，或在采集过程中按 [N] 切分新片段
+python src/apps/collect_and_train.py --action collect --subject person01 --session s1
+# 按"人员 × 片段"分组，同时防住同一人连续帧跨折
+python src/apps/collect_and_train.py --action train --csv data\custom.csv --group_col clip_id
+```
+
+CK+ 特征提取也已从文件名解析出序列号，自动写入 `clip_id`（如 `S010_004`）。
+
+**FER2013 本身不提供受试者 ID**，因此它的主线评测只能按官方 train / publicTest /
+privateTest 划分，无法做按人员或片段的 GroupKFold —— 这是该数据集的结构性局限，
+代码已具备能力，但需要带 subject/片段标注的数据（自采或 CK+）才能给出这类数字。
 
 ## 数据集与评测结果
 
@@ -267,8 +386,9 @@ python src/apps/collect_and_train.py --action train --csv data/custom.csv --mode
 python src/apps/collect_and_train.py --action train --csv data/custom.csv --model_type mlp --save models/custom_mlp.pkl
 ```
 
-采集按键：1 自然、2 微笑、3 惊讶、4 皱眉、5 难过；Q 保存并退出。
-CSV 必须包含 `subject_id`、`label`、按顺序排列的 `feat_0` 至 `feat_135`。
+采集按键：1 自然、2 微笑、3 惊讶、4 皱眉、5 难过；`N` 结束当前片段并开启新片段；Q 保存并退出。
+CSV 必须包含分组列、`label`、按顺序排列的 `feat_0` 至 `feat_135`（默认分组列为 `subject_id`，
+自采数据还会写入 `session_id` 与 `clip_id`）。
 通过合规渠道取得原始 CK+ 数据后，可自行使用 `extract_ck_landmarks.py` 提取。
 `--save` 不指定时默认写入 `models/custom_model.pkl`。
 
@@ -284,20 +404,27 @@ CSV 必须包含 `subject_id`、`label`、按顺序排列的 `feat_0` 至 `feat_
 
 `core/` —— 核心算法库，被其它脚本 import，不直接运行
 
-- `feature_extractor.py`：MediaPipe 关键点提取、几何归一化与头部姿态角
-  （角度取自 MediaPipe `facial_transformation_matrixes`，不用 solvePnP）。
-- `classifier.py`：规则推理、SVM / MLP 训练与跨人评测；按模型声明的特征集自动组装输入向量。
+- `feature_extractor.py`：MediaPipe 关键点提取、几何归一化、头部姿态角
+  （角度取自 MediaPipe `facial_transformation_matrixes`，不用 solvePnP）
+  与逐点几何可见性；`static_mode` 决定 IMAGE（离线逐图）/ VIDEO（视频流跟踪）运行模式。
+- `frame_recorder.py`：逐帧记录与视频级汇总，供演示脚本与视频评测脚本共用同一口径。
+- `classifier.py`：规则推理、SVM / MLP 训练与跨组评测（`group_col` 可选
+  subject_id / session_id / clip_id）；按模型声明的特征集自动组装输入向量，
+  支持校准标记与低置信拒识。
 
 `pipeline/` —— 原始数据到特征表
 
-- `extract_fer_landmarks.py`：FER2013 特征提取（下载 → 关键点/姿态/blendshape → CSV）。
-- `extract_ck_landmarks.py`：本地 CK+ parquet 特征提取。
+- `extract_fer_landmarks.py`：FER2013 特征提取（下载 → 关键点/姿态/可见性/blendshape → CSV）。
+- `extract_ck_landmarks.py`：本地 CK+ parquet 特征提取（解析 subject_id 与 clip_id）。
 - `recalc_pose_columns.py`：用修复后的姿态解算重算特征表 yaw/pitch/roll，带逐行对齐校验。
+- `recalc_visibility_columns.py`：重算特征表可见性列，带逐行对齐校验与 `.bak` 备份。
 
 `experiments/` —— 训练与评测
 
 - `train_fer_compare.py`：FER2013 上 8 组设置的对照实验。
 - `strict_eval.py`：两阶段严格协议，publicTest 选型、privateTest 出最终数字。
+- `calibrate_model.py`：Platt 概率校准 + 拒识阈值扫描（覆盖率-准确率权衡）。
+- `evaluate_video.py`：视频逐帧评测，输出逐帧 CSV 与视频级汇总 JSON。
 - `tune_fer.py`：SVM (C, gamma) 与特征组合的定向调参。
 - `finalize_fer.py`：按最优配置重训部署模型，并做端到端链路验证。
 - `compare_old_new.py`：同一批图像上旧 CK+ 模型与新 FER2013 模型的逐张对比。
@@ -305,8 +432,8 @@ CSV 必须包含 `subject_id`、`label`、按顺序排列的 `feat_0` 至 `feat_
 
 `apps/` —— 可直接运行的入口
 
-- `realtime_demo.py`：摄像头 / 视频演示。
-- `collect_and_train.py`：样本采集与训练入口。
+- `realtime_demo.py`：摄像头 / 视频演示，支持 `--record-csv` 逐帧落盘、`--reject-threshold` 拒识。
+- `collect_and_train.py`：样本采集与训练入口（写入 subject_id / session_id / clip_id）。
 - `make_demo_video.py`：用 FER2013 留出图像合成免摄像头的 `assets/example.mp4`。
 - `test_pipeline.py`：回归测试；不宣称验证真实表情准确率。
 - `download_model.py`：官方 FaceLandmarker 模型下载和校验。
@@ -315,6 +442,7 @@ CSV 必须包含 `subject_id`、`label`、按顺序排列的 `feat_0` 至 `feat_
 
 - `face_landmarker.task`：MediaPipe 关键点检测模型。
 - `model_fer_svm.pkl`、`model_fer_mlp.pkl`：FER2013 5 类模型，**当前默认推荐**。
+- `model_fer_svm_calibrated.pkl`：校准后的 SVM，置信度可当概率读并带拒识阈值。
 - `model_svm.pkl`、`model_mlp.pkl`：旧 CK+ 5 类模型（无 neutral），保留作对比基线。
 
 **数据与文档**
@@ -338,6 +466,10 @@ python src/experiments/compare_old_new.py
 python src/experiments/strict_eval.py
 # 6. 任务C 稳定性测试：姿态分桶 + 光照/距离/旋转受控扰动
 python src/experiments/pose_stability_test.py
+# 7. 概率校准 + 拒识阈值标定（产出 model_fer_svm_calibrated.pkl）
+python src/experiments/calibrate_model.py
+# 8. 任务C 视频逐帧评测（无摄像头也能跑，产出逐帧 CSV 与汇总 JSON）
+python src/experiments/evaluate_video.py --source assets\example.mp4 --no-window
 
 # 用新模型跑摄像头
 python src/apps/realtime_demo.py --source 0 --model models\model_fer_svm.pkl --engine ml

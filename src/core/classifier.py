@@ -30,13 +30,18 @@ from sklearn.metrics import classification_report, confusion_matrix, accuracy_sc
 
 # 5 类目标表情定义
 EXPRESSION_CLASSES = ["neutral", "smile", "surprise", "frown", "sad"]
+
+# 低置信拒识时的输出标签：表示"模型不确定，拒绝给出表情判定"
+UNKNOWN_LABEL = "unknown"
+
 EXPRESSION_NAMES_ZH = {
     "neutral": "自然 (Neutral)",
     "smile": "微笑 (Smile)",
     "surprise": "惊讶 (Surprise)",
     "frown": "皱眉 (Frown/Angry)",
     "sad": "难过 (Sad)",
-    "disgust": "厌恶 (Disgust)"
+    "disgust": "厌恶 (Disgust)",
+    "unknown": "不确定/拒识 (Unknown)"
 }
 
 SRC_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))            # src/
@@ -51,6 +56,11 @@ class ExpressionClassifier:
         self.feature_set = "coords"
         self.uses_blendshape = False
         self.bl_names = None
+        # 置信度的"性质"：False 表示输出的只是未经校准的相对分数（原 SVC
+        # probability=False + decision_function 手写 softmax），不能当概率解释；
+        # 由 calibrate_model.py 产出的模型会把 calibrated 置为 True。
+        self.prob_is_calibrated = False
+        self.reject_threshold = None
 
         if model_path:
             if os.path.isabs(model_path):
@@ -91,8 +101,14 @@ class ExpressionClassifier:
                 raise FileNotFoundError(
                     f"模型声明使用 blendshape 特征，但缺少顺序元数据: {meta}"
                 )
+        # 校准元数据：calibrate_model.py 产出的模型带 calibrated=True 与拒识阈值
+        self.prob_is_calibrated = bool(data.get("calibrated", False))
+        raw_th = data.get("reject_threshold")
+        self.reject_threshold = float(raw_th) if raw_th is not None else None
+        conf_kind = "已校准概率" if self.prob_is_calibrated else "未校准相对分数"
+        th_txt = "-" if self.reject_threshold is None else f"{self.reject_threshold:.2f}"
         print(f"[Success] 成功加载已训练模型: {path}，模型类型: {type(self.model).__name__}，"
-              f"特征集: {self.feature_set}")
+              f"特征集: {self.feature_set}，置信度性质: {conf_kind}，拒识阈值: {th_txt}")
         return self
 
     def build_input(self, norm_vector, blendshapes=None):
@@ -108,12 +124,23 @@ class ExpressionClassifier:
         joblib.dump({"model": self.model, "classes": self.classes, "type": model_type}, path)
         print(f"[Success] 模型已保存至: {path}")
 
-    def predict(self, norm_vector, geo_metrics=None, blendshapes=None, use_ml_model=False):
+    def predict(self, norm_vector, geo_metrics=None, blendshapes=None, use_ml_model=False,
+                reject_threshold=None):
         """
         可切换的模型/规则表情分类器：
         1. 默认优先使用基于人脸动作编码系统 (FACS) 与 MediaPipe 52维表情基 (Blendshapes) 的精细动作解码 (未经真实视频集校准)
         2. 若启用 use_ml_model=True 且已加载机器学习模型，则使用 SVM/MLP
         返回: (pred_label, confidence, prob_dict)
+
+        reject_threshold 低置信拒识：
+          给了阈值且最高分低于阈值时，返回标签 UNKNOWN_LABEL ("unknown")，
+          同时仍返回原始 confidence 与 prob_dict，调用方可以据此显示"不确定"。
+          留空 (None) 时使用模型自带的 reject_threshold；传 0.0 可显式关闭拒识。
+
+        注意 confidence 的性质取决于 prob_is_calibrated：
+          - True ：Platt 标定后的概率，可以解释为"有把握的程度"
+          - False：SVM decision_function 手写 softmax 的相对分数，**不是概率**，
+                   阈值拒识在这种情形下只是启发式，不保证覆盖率-准确率单调
         """
         if use_ml_model and self.model is None:
             raise ValueError("ML engine requested but no model is loaded")
@@ -130,10 +157,21 @@ class ExpressionClassifier:
             pred_label = self.classes[best_idx]
             conf = float(probs[best_idx])
             prob_dict = {cls_name: float(p) for cls_name, p in zip(self.classes, probs)}
-            return pred_label, conf, prob_dict
+            return self._apply_rejection(pred_label, conf, prob_dict, reject_threshold)
 
         # 默认执行人脸生理动作编码 (FACS + Blendshapes + 几何度量)
-        return self._predict_facs(geo_metrics, blendshapes)
+        label, conf, prob_dict = self._predict_facs(geo_metrics, blendshapes)
+        return self._apply_rejection(label, conf, prob_dict, reject_threshold)
+
+    def _apply_rejection(self, label, conf, prob_dict, reject_threshold):
+        """统一执行低置信拒识，返回新的 (label, conf, prob_dict)。"""
+        threshold = self.reject_threshold if reject_threshold is None else reject_threshold
+        if threshold is None:
+            return label, conf, prob_dict
+        threshold = float(threshold)
+        if threshold > 0.0 and conf < threshold:
+            return UNKNOWN_LABEL, conf, prob_dict
+        return label, conf, prob_dict
 
     def _predict_facs(self, geo, bs):
         """
@@ -217,10 +255,49 @@ class ExpressionClassifier:
         return best_cls, conf, prob_dict
 
 
-def train_and_evaluate(csv_path, model_type="svm", n_splits=5, save_path=None):
+class TemperatureScaledEstimator:
+    """温度缩放包装器：把 decision_function 输出除以温度 T 后再 softmax。
+
+    SVC(probability=False) 没有 predict_proba，classifier 里是手写 softmax 得到相对
+    分数。温度缩放只调一个参数 T，就能在**不改变分数排序**的前提下改善概率质量，
+    是"最小改动"的校准方式；T 由 src/experiments/calibrate_model.py 在独立校准集上
+    按 NLL 一维搜索得到。
+
+    这个类定义在 classifier.py（而不是实验脚本里）是有意的：joblib 反序列化时需要
+    按模块路径找到类定义，而实验脚本不在 classifier 的导入路径上，放那边会 UnpicklingError。
+    """
+
+    def __init__(self, estimator, temperature=1.0):
+        self.estimator = estimator
+        self.temperature = float(temperature)
+
+    @property
+    def classes_(self):
+        return self.estimator.classes_
+
+    def predict_proba(self, X):
+        d = np.asarray(self.estimator.decision_function(X), dtype=np.float64)
+        if d.ndim == 1:                      # 二分类退化为单列，补成两列
+            d = np.column_stack([-d, d])
+        z = d / self.temperature
+        e = np.exp(z - z.max(axis=1, keepdims=True))
+        return e / e.sum(axis=1, keepdims=True)
+
+    def predict(self, X):
+        return np.asarray(self.classes_)[self.predict_proba(X).argmax(axis=1)]
+
+
+def train_and_evaluate(csv_path, model_type="svm", n_splits=5, save_path=None,
+                       group_col="subject_id"):
     """
     任务 B 核心代码：
-    使用 GroupKFold 严格按人员 (subject_id) 进行交叉验证并对比模型
+    严格按分组列做 GroupKFold 交叉验证并对比模型。
+
+    group_col 决定"严格划分"的粒度（任务A 要求按人员或视频片段划分，防止连续帧泄漏）：
+      - "subject_id"（默认）：按人员划分，同一人的样本只会出现在同一折
+      - "session_id"        ：按拍摄时段划分
+      - "clip_id"           ：按"人员 × 片段"划分，同时防止同一人的同一段连续帧跨折，
+                              是最严格的口径（连续帧高度相关，是最隐蔽的泄漏源）
     """
     if not os.path.exists(csv_path):
         print(f"[Error] 数据集文件不存在: {csv_path}")
@@ -229,28 +306,29 @@ def train_and_evaluate(csv_path, model_type="svm", n_splits=5, save_path=None):
     df = pd.read_csv(csv_path)
     print(f"[Data] 成功加载数据集: {csv_path}, 共 {len(df)} 条样本")
 
-    # 提取特征、标签、受试者ID
+    # 提取特征、标签、分组ID
     feature_cols = [f"feat_{i}" for i in range(136)]
-    required = ["subject_id", "label", *feature_cols]
+    required = [group_col, "label", *feature_cols]
     if any(c not in df.columns for c in required):
-        raise ValueError("CSV must contain subject_id, label, and feat_0 through feat_135")
+        raise ValueError(f"CSV must contain {group_col}, label, and feat_0 through feat_135")
     if df[required].isna().any().any() or not np.isfinite(df[feature_cols].to_numpy(dtype=float)).all():
         raise ValueError("CSV contains missing or non-finite values")
     X = df[feature_cols].values
     y = df["label"].values
-    groups = df["subject_id"].values if "subject_id" in df.columns else np.arange(len(df))
+    groups = df[group_col].values
 
-    unique_subjects = len(np.unique(groups))
-    print(f"[Data] 受试者数量: {unique_subjects}，特征维度: {X.shape[1]}")
+    unique_groups = len(np.unique(groups))
+    print(f"[Data] 分组列={group_col}，分组数: {unique_groups}，特征维度: {X.shape[1]}")
 
-    if unique_subjects < 2 or n_splits < 2:
-        raise ValueError("Cross-subject evaluation requires at least two subjects and folds")
-    gkf = GroupKFold(n_splits=min(n_splits, unique_subjects))
+    if unique_groups < 2 or n_splits < 2:
+        raise ValueError(
+            f"Cross-group evaluation requires at least two distinct {group_col} values and folds")
+    gkf = GroupKFold(n_splits=min(n_splits, unique_groups))
 
     all_y_true = []
     all_y_pred = []
 
-    print(f"\n================ 开始 {model_type.upper()} 模型 GroupKFold 严格跨人评测 ================")
+    print(f"\n================ 开始 {model_type.upper()} 模型 GroupKFold 严格跨组({group_col})评测 ================")
     fold = 1
 
     for train_idx, test_idx in gkf.split(X, y, groups=groups):
@@ -268,7 +346,9 @@ def train_and_evaluate(csv_path, model_type="svm", n_splits=5, save_path=None):
         preds = clf.predict(X_test)
 
         acc = accuracy_score(y_test, preds)
-        print(f"Fold {fold}/{gkf.get_n_splits()} - 独立测试集受试者: {np.unique(groups[test_idx])} -> Accuracy: {acc * 100:.2f}%")
+        held_out = np.unique(groups[test_idx])
+        shown = held_out if len(held_out) <= 8 else list(held_out[:8]) + ["..."]
+        print(f"Fold {fold}/{gkf.get_n_splits()} - 留出 {group_col}: {shown} -> Accuracy: {acc * 100:.2f}%")
 
         all_y_true.extend(y_test)
         all_y_pred.extend(preds)
@@ -288,7 +368,9 @@ def train_and_evaluate(csv_path, model_type="svm", n_splits=5, save_path=None):
         clf.fit(X, y)
         joblib.dump({"model": clf, "classes": list(clf.classes_), "type": model_type,
                      "feature_schema": "legacy_68_xy_v1", "training_samples": len(df),
-                     "training_subjects": unique_subjects,
+                     "group_col": group_col,
+                     "training_subjects": unique_groups,
+                     "training_groups": unique_groups,
                      "cv_accuracy": accuracy_score(all_y_true, all_y_pred),
                      "cv_macro_f1": f1_score(all_y_true, all_y_pred, average="macro")}, save_path)
         print(f"\n[Saved] 全量数据重训模型已保存至: {save_path}")

@@ -5,7 +5,10 @@ extract_fer_landmarks.py
 
 与 extract_ck_landmarks.py 的差异：
   1. 数据来源改为 FER2013（指导书推荐的公开数据集，含 neutral 自然类）
-  2. 增加关键点可见性 vis_0..vis_67（任务A 要求保存可见性信息）
+  2. 关键点可见性 vis_0..vis_67（任务A 要求保存可见性信息）—— 由 MediaPipe 输出的
+     归一化 3D 坐标做局部法线 + 背向判定得到，见 feature_extractor._estimate_visibility。
+     注意：MediaPipe FaceLandmarker 本身不输出 visibility 字段（恒为 None），
+     旧实现用 getattr 兜底把 68 列全写成 0，属于"列在但无信息量"，现已改为真实几何量。
   3. 增加 yaw/pitch/roll 姿态列，便于后续按头部姿态分组评测（任务C）
   4. 增加 52 维 blendshape 特征 bl_0..bl_51，用于特征集对照实验（任务B）
 
@@ -38,7 +41,7 @@ import pandas as pd
 import cv2
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from feature_extractor import FaceFeatureExtractor
+from feature_extractor import FaceFeatureExtractor, MEDIAPIPE_TO_68   # noqa: E402
 
 FER_LABEL_NAMES = {0: "angry", 1: "disgust", 2: "fear", 3: "happy",
                    4: "sad", 5: "surprise", 6: "neutral"}
@@ -161,11 +164,13 @@ def main():
                 for j, v in enumerate(res["norm_vector"]):
                     rec[f"feat_{j}"] = round(float(v), args.decimals)
 
-                mesh = res["raw_mesh"]
-                # 68 关键点对应的 MediaPipe 索引，与 feature_extractor 的映射保持一致
-                from feature_extractor import MEDIAPIPE_TO_68
-                for j, idx in enumerate(MEDIAPIPE_TO_68):
-                    rec[f"vis_{j}"] = round(float(getattr(mesh[idx], "visibility", 0.0) or 0.0), 3)
+                # 逐点几何可见性：0=背对相机/被自遮挡，1=正对相机。
+                # 由 478 点 3D 网格局部法线做背向判定得到（MediaPipe 不输出 visibility，
+                # 见 feature_extractor._estimate_visibility 的说明）。
+                vis68 = res["visibility_68"]
+                for j in range(len(MEDIAPIPE_TO_68)):
+                    rec[f"vis_{j}"] = round(float(vis68[j]), 3)
+                rec["vis_mean"] = round(float(np.mean(vis68)), 4)
 
                 bl = res["blendshapes"]
                 for j, name in enumerate(bs_names):
@@ -208,7 +213,8 @@ def main():
         "rows": int(len(out)),
         "columns": int(out.shape[1]),
         "classes": sorted(out["label"].unique().tolist()),
-        "feature_schema": "fer2013_68xy_vis_blendshape_v1",
+        "feature_schema": "fer2013_68xy_geovis_blendshape_v2",
+        "visibility": "geometric_backface (68 点局部法线背向判定, 0~1)",
         "blendshape_dims": len(bs_names or []),
         "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }

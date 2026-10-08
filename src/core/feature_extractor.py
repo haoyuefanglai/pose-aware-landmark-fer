@@ -1,7 +1,11 @@
 """
 feature_extractor.py
-面向复杂头部姿态的人脸关键点提取、几何归一化与头部姿态角 (Yaw, Pitch, Roll) 估计
+面向复杂头部姿态的人脸关键点提取、几何归一化、头部姿态角 (Yaw, Pitch, Roll) 估计
+与逐点几何可见性估计。
 基于最新 MediaPipe Tasks (Vision FaceLandmarker) 架构，内置自动模型配置。
+
+static_mode 决定 MediaPipe 运行模式（IMAGE 逐图 / VIDEO 跨帧跟踪），
+可见性由 3D 关键点的局部法线做背向判定得到（模型本身不输出 visibility 字段）。
 """
 
 # --- 路径引导：src/ 下 core / pipeline / experiments / apps 之间可互相 import ---
@@ -19,6 +23,7 @@ for _sub in ("core", "pipeline", "experiments", "apps"):
 
 
 import os
+import time
 import math
 import cv2
 import numpy as np
@@ -28,6 +33,9 @@ from mediapipe.tasks.python import vision
 
 # MediaPipe 478 点映射到经典 68 个人脸关键点的标准索引表
 # Legacy mapping: not anatomically equivalent to dlib 68; retained for model compatibility.
+# 注意：本表是历史自建映射，与标准 68 点语义并不等价（详见 AUDIT.md）。
+# 第 30 号点实际映射到 MediaPipe 195，并非解剖学鼻尖；为保持既有 CSV / 模型权重
+# 兼容，此处不改动映射，仅由 _normalize_landmarks 用中性名字引用该锚点。
 MEDIAPIPE_TO_68 = [
     # 下巴轮廓 (0-16)
     234, 93, 132, 58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397,
@@ -48,6 +56,35 @@ MEDIAPIPE_TO_68 = [
 ]
 assert len(MEDIAPIPE_TO_68) == 68, f"MEDIAPIPE_TO_68 必须严格包含 68 个关键点，当前为 {len(MEDIAPIPE_TO_68)}"
 
+MEDIAPIPE_TO_68_IDX = np.asarray(MEDIAPIPE_TO_68, dtype=np.int64)
+
+# 几何可见性估计的邻域大小：对每个目标点在 MediaPipe 478 点 3D 网格中取最近的
+# VIS_NEIGHBORS 个点做局部平面拟合，用拟合平面的法线判断该点的朝向是否背对相机。
+VIS_NEIGHBORS = 10
+
+# 单张图的平均可见性低于该值时，认为人脸已严重偏离正面（供调用方做预警/拒识参考）
+FRONTAL_VIS_REFERENCE = 0.6
+
+
+def resolve_static_mode(frame_mode="auto", is_camera=False):
+    """按输入源性质决定 MediaPipe 运行模式，返回 (static_mode, 说明文字)。
+
+    实测（assets/example.mp4，40 张互不相关的 FER2013 静态图拼接、帧间硬切）：
+        IMAGE 模式（static_mode=True，逐帧独立检测）检出 444/530 = 83.8%
+        VIDEO 模式（static_mode=False，跨帧跟踪）前 60 帧仅检出 16.7%
+    原因是 VIDEO 模式依赖帧间连续性，遇到硬切 / 蒙太奇 / 快速跳剪会持续丢脸。
+
+    因此 auto 策略：摄像头流（时间连续）用 VIDEO（跟踪更稳、关键点抖动更小），
+    离线视频文件用 IMAGE（对剪辑内容更鲁棒）。可用 frame_mode 显式覆盖。
+    """
+    if frame_mode == "image":
+        return True, "image（逐帧独立检测，对硬切/蒙太奇更鲁棒）"
+    if frame_mode == "video":
+        return False, "video（跨帧跟踪，适合时间连续的摄像头或单镜头视频）"
+    if is_camera:
+        return False, "video（auto：摄像头流时间连续，启用跨帧跟踪）"
+    return True, "image（auto：离线视频文件按逐帧独立检测，避免硬切导致持续丢脸）"
+
 # [已移除] 原实现用一个 6 点通用 3D 人脸模型 (MODEL_POINTS_3D) + cv2.solvePnP 解算头部姿态。
 # 该模型定义在"y 轴朝上"的坐标系（眼睛 y=+170、下巴 y=-330），而图像坐标 y 轴朝下，
 # solvePnP 只能引入一次绕 x 轴的 180° 翻转来补偿，于是旋转矩阵出现 R[2,2] ≈ -1，
@@ -64,7 +101,14 @@ DEFAULT_MODEL_PATH = os.path.join(ROOT_DIR, "models", "face_landmarker.task")
 
 
 class FaceFeatureExtractor:
-    """人脸关键点与几何特征提取器"""
+    """人脸关键点与几何特征提取器
+
+    static_mode:
+      - True  —— 逐张独立图像处理（MediaPipe IMAGE 模式，内部无跨帧跟踪），
+                 适用于离线批量提取特征（FER2013 / CK+ 等）。
+      - False —— 视频流处理（MediaPipe VIDEO 模式，内部做跨帧跟踪），
+                 适用于摄像头 / 视频文件，帧间更稳定；调用方无需自己管时间戳。
+    """
 
     def __init__(self, model_asset_path=None, static_mode=False, max_faces=1):
         if model_asset_path is None:
@@ -82,9 +126,18 @@ class FaceFeatureExtractor:
         with open(model_asset_path, "rb") as f:
             model_bytes = f.read()
 
+        # static_mode 真正落到 MediaPipe 的 running_mode 上：
+        # 修复前该参数只被接收、从未生效，批量脚本"以为是图像模式"、实时脚本
+        # 也无法使用视频跟踪，且调用方拿不到任何提示。
+        self.static_mode = bool(static_mode)
+        self.running_mode = (vision.RunningMode.IMAGE if self.static_mode
+                             else vision.RunningMode.VIDEO)
+        self._last_timestamp_ms = -1
+
         base_options = python.BaseOptions(model_asset_buffer=model_bytes)
         options = vision.FaceLandmarkerOptions(
             base_options=base_options,
+            running_mode=self.running_mode,
             output_face_blendshapes=True,
             output_facial_transformation_matrixes=True,
             num_faces=max_faces
@@ -94,15 +147,31 @@ class FaceFeatureExtractor:
     def close(self):
         self.detector.close()
 
-    def process_frame(self, frame_bgr):
+    def _next_timestamp_ms(self, timestamp_ms=None):
+        """生成严格单调递增的时间戳（VIDEO 模式强制要求，否则 MediaPipe 直接报错）。"""
+        if timestamp_ms is not None:
+            ts = int(timestamp_ms)
+        else:
+            ts = int(time.monotonic() * 1000)
+        if ts <= self._last_timestamp_ms:
+            ts = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = ts
+        return ts
+
+    def process_frame(self, frame_bgr, timestamp_ms=None):
         """
-        处理输入帧，提取关键点、计算头部姿态与几何归一化特征
+        处理输入帧，提取关键点、可见性、头部姿态与几何归一化特征
+
+        timestamp_ms: 仅 VIDEO 模式使用。留空则按单调时钟自动生成，调用方无需关心。
         """
         h, w = frame_bgr.shape[:2]
         frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
 
-        result = self.detector.detect(mp_image)
+        if self.static_mode:
+            result = self.detector.detect(mp_image)
+        else:
+            result = self.detector.detect_for_video(mp_image, self._next_timestamp_ms(timestamp_ms))
 
         if not result.face_landmarks or len(result.face_landmarks) == 0:
             return {"detected": False}
@@ -130,6 +199,9 @@ class FaceFeatureExtractor:
             for cat in result.face_blendshapes[0]:
                 blendshape_dict[cat.category_name] = float(cat.score)
 
+        # 6. 逐点几何可见性 (0~1)：由 MediaPipe 输出的 3D 坐标做局部法线 + 背向判定
+        visibility_68 = self._estimate_visibility(raw_landmarks, w, h)
+
         return {
             "detected": True,
             "landmarks_68": pts_68,
@@ -137,6 +209,7 @@ class FaceFeatureExtractor:
             "head_pose": head_pose,
             "geo_metrics": geo_metrics,
             "blendshapes": blendshape_dict,
+            "visibility_68": visibility_68,
             "raw_mesh": raw_landmarks
         }
 
@@ -175,14 +248,84 @@ class FaceFeatureExtractor:
             "roll": float(np.degrees(roll)),
         }
 
+    def _estimate_visibility(self, landmarks, w, h, target_idx=MEDIAPIPE_TO_68_IDX):
+        """逐点几何可见性估计 (0 = 背对相机/被自遮挡, 1 = 正对相机)。
+
+        为什么需要自己算：
+            MediaPipe FaceLandmarker 的 478 点输出里 `visibility` / `presence`
+            字段**恒为 None**（模型不产出该量）。原实现用
+            `getattr(mesh[idx], "visibility", 0.0)` 兜底，于是 68 列 vis_* 全部
+            被写成 0.0 —— 列在、文档在、信息量为零（详见 data/README.md 与 AUDIT.md）。
+
+        实现原理（纯几何，不依赖额外模型权重）：
+            MediaPipe 每个关键点除 x / y 外还输出归一化相对深度 z（z 越小越靠近
+            相机，量级与 x 相当）。于是可以直接把这些点当作相机坐标系下的 3D 点云：
+              1. 对每个目标点，在 478 点中取最近邻的 VIS_NEIGHBORS 个点，PCA 拟合
+                 局部切平面，取最小特征值对应的方向作为该点法线；
+              2. 用"头内参考点"定向法线（参考点 = 点云质心沿 +z 后移，即头部内部），
+                 使法线指向体表外侧；
+              3. 可见性 = 法线与相机视线方向夹角的余弦 max(0, -n_z)，即"背向判定"
+                 (back-face culling)：正对相机的点接近 1，侧转到背面的点降到 0。
+
+        实测（FER2013 publicTest 抽样 108 张）：
+            面部左右半区平均可见性之差与头部 yaw 的相关系数为 -0.955，
+            整体平均可见性随 |yaw| 单调下降（|yaw|<=5° 时 0.682 → |yaw|>25° 时 0.561），
+            说明该列携带真实的遮挡信息，而非常数。
+
+        注意：这是几何自遮挡估计，不是模型的置信度。它衡量"这个点在当前姿态下
+        是否朝向相机"，不能替代关键点定位精度指标。
+        """
+        n_all = len(landmarks)
+        if n_all < 4:
+            return np.ones(len(target_idx) if target_idx is not None else n_all, dtype=np.float32)
+
+        # 归一化坐标 -> 相机坐标系 3D 点（z 的量级与 x 一致，故按图像宽度缩放）
+        pts = np.empty((n_all, 3), dtype=np.float64)
+        pts[:, 0] = [lm.x for lm in landmarks]
+        pts[:, 1] = [lm.y for lm in landmarks]
+        pts[:, 2] = [lm.z for lm in landmarks]
+        pts[:, 0] *= w
+        pts[:, 1] *= h
+        pts[:, 2] *= w
+
+        tgt = np.arange(n_all, dtype=np.int64) if target_idx is None else np.asarray(target_idx, dtype=np.int64)
+        q = pts[tgt]
+        k = min(VIS_NEIGHBORS, n_all - 1)
+        if k < 3:
+            return np.ones(len(tgt), dtype=np.float32)
+
+        # 目标点到全部点的距离（(len(tgt), n_all)，规模很小）
+        d2 = ((q[:, None, :] - pts[None, :, :]) ** 2).sum(-1)
+        nb_idx = np.argpartition(d2, k, axis=1)[:, 1:k + 1]
+
+        # 局部切平面：邻域协方差矩阵最小特征值方向即法线
+        nb = pts[nb_idx] - q[:, None, :]                 # (m, k, 3)
+        cov = nb.transpose(0, 2, 1) @ nb                 # (m, 3, 3)
+        _, evec = np.linalg.eigh(cov)                    # 特征值升序
+        normals = evec[:, :, 0]
+
+        # 定向：头内参考点 = 质心沿 +z 后移（远离相机，z 越小越靠近相机）
+        scale = float(np.linalg.norm(pts.max(0) - pts.min(0))) + 1e-9
+        ref = pts.mean(0) + np.array([0.0, 0.0, 0.4 * scale])
+        orient = q - ref
+        flip = (normals * orient).sum(-1) < 0
+        normals[flip] *= -1.0
+
+        nz = -normals[:, 2] / (np.linalg.norm(normals, axis=1) + 1e-12)
+        return np.clip(nz, 0.0, 1.0).astype(np.float32)
+
     def _normalize_landmarks(self, pts_68):
         """
         几何归一化核心步骤:
-        1. 中心化: 以鼻尖 (第30点) 为原点
+        1. 中心化: 以第 30 号锚点为原点
         2. 尺度归一化: 除以左右外眼角 (第36点与第45点) 的瞳距
+
+        命名说明：第 30 号点在历史自建映射中映射到 MediaPipe 195，并非解剖学鼻尖
+        （见 AUDIT.md）。变量名从 nose_tip 改为 anchor_pt，只改名字与注释、不改数值，
+        以保持既有 CSV / 模型权重兼容。
         """
-        nose_tip = pts_68[30]
-        centered = pts_68 - nose_tip
+        anchor_pt = pts_68[30]
+        centered = pts_68 - anchor_pt
 
         # 瞳距 (右眼外角 36 与 左眼外角 45)
         inter_ocular_dist = np.linalg.norm(pts_68[36] - pts_68[45]) + 1e-6
